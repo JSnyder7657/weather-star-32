@@ -171,23 +171,23 @@ void perform_menu_action() {
         refresh_display = true; 
     } else if (compare_strings(MENU_OPTION_CLEAR, curr_menu_node->data, -1)) {
         memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        memcpy(cc_desc, CC_CLEAR, DESC_BUFFER_SIZE);
+        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_CLEAR);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_CLOUDY, curr_menu_node->data, -1)) {
         memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        memcpy(cc_desc, MENU_OPTION_CLOUDY, DESC_BUFFER_SIZE);
+        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_CLOUDY);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_PARTLY_CLOUDY, curr_menu_node->data, -1)) {
         memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        memcpy(cc_desc, MENU_OPTION_PARTLY_CLOUDY, DESC_BUFFER_SIZE);
+        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_PARTLY_CLOUDY);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_SCATTERED_SHOWERS, curr_menu_node->data, -1)) {
         memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        memcpy(cc_desc, MENU_OPTION_SCATTERED_SHOWERS, DESC_BUFFER_SIZE);
+        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_SCATTERED_SHOWERS);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_THUNDERSTORM, curr_menu_node->data, -1)) {
         memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        memcpy(cc_desc, MENU_OPTION_THUNDERSTORM, DESC_BUFFER_SIZE);
+        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_THUNDERSTORM);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_TORNADO_WARNING, curr_menu_node->data, -1)) {
         add_test_alert(MENU_OPTION_TORNADO_WARNING, JSON_EXTREME);
@@ -198,7 +198,8 @@ void perform_menu_action() {
 struct MenuNode* create_menu_nodes(cJSON *curr_json, struct MenuNode *parent_node, bool part_of_array) {
     // Create menu node.
     struct MenuNode *new_node = (struct MenuNode*) calloc(1, sizeof(struct MenuNode));
-    memcpy(new_node->data, part_of_array ? curr_json->valuestring : curr_json->string, MENU_NODE_DATA_BUFFER_SIZE);
+    snprintf(new_node->data, MENU_NODE_DATA_BUFFER_SIZE, "%s", 
+        part_of_array ? curr_json->valuestring : curr_json->string);
     if (parent_node != NULL && parent_node->first_child == NULL) {
         parent_node->first_child = new_node;
     }
@@ -350,9 +351,9 @@ bool add_alert(const char *event, const char *alert_exp_date_time, const char *s
     struct tm tm;
     strptime(alert_exp_date_time, DATE_TIME_STRING_FORMAT, &tm);
 
-    struct AlertNode *new_node = (struct AlertNode*) malloc(sizeof(struct AlertNode));
-    memcpy(new_node->data, event, MENU_NODE_DATA_BUFFER_SIZE);
-    memcpy(new_node->severity, severity, SEVERITY_BUFFER_SIZE);
+    struct AlertNode *new_node = (struct AlertNode*) calloc(1, sizeof(struct AlertNode));
+    snprintf(new_node->data, MENU_NODE_DATA_BUFFER_SIZE, "%s", event);
+    snprintf(new_node->data, SEVERITY_BUFFER_SIZE, "%s", severity);
     new_node->expire_time = timegm(&tm);
     
     if (alert_list.root_node == NULL) {
@@ -365,7 +366,7 @@ bool add_alert(const char *event, const char *alert_exp_date_time, const char *s
         temp_node->next_node = new_node;
     }
 
-    ESP_LOGI(TAG_INFO, "Added test alert.");
+    ESP_LOGI(TAG_INFO, "Added alert.");
 
     return true;
 }
@@ -397,14 +398,18 @@ bool remove_expired_alerts() {
 }
 
 bool set_curr_alert() {
+    ESP_LOGI(TAG_INFO, "Setting current alert ...");
     if (alert_list.root_node == NULL) {
         return false;
     } else if (alert_list.curr_node == NULL) {
         alert_list.curr_node = alert_list.root_node;
-        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.root_node");
+        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.root_node.");
     } else {
         alert_list.curr_node = alert_list.curr_node->next_node;
-        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.curr_node->next_node");
+        if (alert_list.curr_node == NULL) {
+            alert_list.curr_node = alert_list.root_node;
+        }
+        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.curr_node->next_node.");
     }
 
     return true;
@@ -476,14 +481,9 @@ bool update_alerts() {
     }
 
     char request_url[REQUEST_URL_BUFFER_SIZE];
-	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
-	strcat(request_url, API_HOST);
-	strcat(request_url, NWS_API_ALERTS_URL_PART);
-	strcat(request_url, PARAM_START);
-	strcat(request_url, NWS_API_URL_POINT_PARAM);
-	strcat(request_url, LATITUDE);
-	strcat(request_url, LAT_LONG_DELIM);
-	strcat(request_url, LONGITUDE);
+    memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
+    snprintf(request_url, REQUEST_URL_BUFFER_SIZE, "%s%s%s%s%s%s%s", API_HOST, NWS_API_ALERTS_URL_PART, PARAM_START, 
+        NWS_API_URL_POINT_PARAM, LATITUDE, LAT_LONG_DELIM, LONGITUDE);
 
     // Configure HTTP client
     config.url = request_url;
@@ -540,7 +540,7 @@ bool update_alerts() {
             continue;
         }
         memset(severity, 0, SEVERITY_BUFFER_SIZE);
-        memcpy(severity, cJSON_GetStringValue(cjson_obj_item), SEVERITY_BUFFER_SIZE);
+        snprintf(severity, SEVERITY_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_obj_item));
 
         // Determine what to do depending on the severity of the alert.
         if (compare_strings(JSON_EXTREME, severity, -1) || compare_strings(JSON_SEVERE, severity, -1) 
@@ -552,9 +552,10 @@ bool update_alerts() {
             if (cjson_obj_item == NULL) {
                 // In this case, there's an alert but we failed to parse it. Alerts are important, so lets add a 
                 // placeholder value here instead.
-                memcpy(alert, GENERIC_ALERT_EVENT, MENU_NODE_DATA_BUFFER_SIZE);
+                snprintf(alert, MENU_NODE_DATA_BUFFER_SIZE, "%s", GENERIC_ALERT_EVENT);
             } else {
-                memcpy(alert, cJSON_GetStringValue(cjson_obj_item), MENU_NODE_DATA_BUFFER_SIZE);
+                snprintf(alert, MENU_NODE_DATA_BUFFER_SIZE, cJSON_GetStringValue(cjson_obj_item), 
+                    MENU_NODE_DATA_BUFFER_SIZE);
             }
 
             // Get the expiration date and time.
@@ -565,7 +566,8 @@ bool update_alerts() {
                 continue;
             }
             memset(alert_exp_date_time, 0, DATE_TIME_STRING_BUFFER_SIZE);
-            memcpy(alert_exp_date_time, cJSON_GetStringValue(cjson_arr_item_obj), DATE_TIME_STRING_BUFFER_SIZE);
+            snprintf(alert_exp_date_time, DATE_TIME_STRING_BUFFER_SIZE, cJSON_GetStringValue(cjson_obj_item), 
+                DATE_TIME_STRING_BUFFER_SIZE);
 
             // Finally, add the alert to the alert list.
             add_alert(alert, alert_exp_date_time, severity);
@@ -593,11 +595,8 @@ bool update_curr_conditions() {
     }
 	char request_url[REQUEST_URL_BUFFER_SIZE];
 	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
-	strcat(request_url, API_HOST);
-	strcat(request_url, NWS_API_POINTS_URL_PART);
-	strcat(request_url, LATITUDE);
-	strcat(request_url, LAT_LONG_DELIM);
-	strcat(request_url, LONGITUDE);
+    snprintf(request_url, REQUEST_URL_BUFFER_SIZE, "%s%s%s%s%s", API_HOST, NWS_API_POINTS_URL_PART, LATITUDE, 
+        LAT_LONG_DELIM, LONGITUDE);
 
     // Configure HTTP client
     config.url = request_url;
@@ -633,7 +632,7 @@ bool update_curr_conditions() {
         cJSON_Delete(cjson_root);
         return false;
     }
-    memcpy(ob_stations_url_raw, val, OB_STN_BUFFER_SIZE);
+    snprintf(ob_stations_url_raw, OB_STN_BUFFER_SIZE, "%s", val);
 
     cJSON_Delete(cjson_root);
 
@@ -646,10 +645,8 @@ bool update_curr_conditions() {
         return false;
     }
 	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
-	strcat(request_url, ob_stations_url_raw);
-	strcat(request_url, PARAM_START);
-	strcat(request_url, NWS_API_URL_PART_LIMIT_PARAM);
-	strcat(request_url, NWS_API_ITEM_LIMIT);
+    snprintf(request_url, REQUEST_URL_BUFFER_SIZE, "%s%s%s%s", ob_stations_url_raw, PARAM_START, 
+        NWS_API_URL_PART_LIMIT_PARAM, NWS_API_ITEM_LIMIT);
     
     // Initialize HTTP client and perform the HTTP GET request
     reset_response_buffer(http_response_buffer, &http_response_buffer_len);
@@ -682,7 +679,7 @@ bool update_curr_conditions() {
         cJSON_Delete(cjson_root);
         return false;
     }
-    memcpy(stations_request_str_raw, cjson_ob_station->valuestring, DESC_BUFFER_SIZE);
+    snprintf(stations_request_str_raw, DESC_BUFFER_SIZE, "%s", cjson_ob_station->valuestring);
     
     cJSON_Delete(cjson_root);
 
@@ -695,8 +692,8 @@ bool update_curr_conditions() {
         return false;
     }
 	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
-	strcat(request_url, stations_request_str_raw);
-	strcat(request_url, NWS_API_OBSERVATIONS_LATEST_URL_PART);
+    snprintf(request_url, REQUEST_URL_BUFFER_SIZE, "%s%s", stations_request_str_raw, 
+        NWS_API_OBSERVATIONS_LATEST_URL_PART);
 
     // Reset response buffer;
     reset_response_buffer(http_response_buffer, &http_response_buffer_len);
@@ -743,7 +740,7 @@ bool update_curr_conditions() {
         ESP_LOGE(TAG_ERROR, "Error parsing description from JSON.");
     } else {
         memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        memcpy(cc_desc, cJSON_GetStringValue(cjson_desc), DESC_BUFFER_SIZE);
+        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_desc));
         ESP_LOGI(TAG_INFO, "Set description");
     }
 
@@ -784,21 +781,21 @@ bool update_curr_conditions() {
     memset(wind_dir, 0, WIND_DIR_BUFFER_SIZE);
 
     if (wind_direction <= 15.0f || wind_direction > 345.0f) {           // North
-        memcpy(wind_dir, WIND_DIR_N, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_N);
     } else if (wind_direction > 15.0f && wind_direction <= 75.0f) {     // North-west
-        memcpy(wind_dir, WIND_DIR_NW, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_NW);
     } else if (wind_direction > 75.0f && wind_direction <= 105.0f) {    // West
-        memcpy(wind_dir, WIND_DIR_W, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_W);
     } else if (wind_direction > 105.0f && wind_direction <= 165.0f) {   // South-west
-        memcpy(wind_dir, WIND_DIR_SW, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_SW);
     } else if (wind_direction > 165.0f && wind_direction <= 195.0f) {   // South
-        memcpy(wind_dir, WIND_DIR_S, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_S);
     } else if (wind_direction > 195.0f && wind_direction <= 255.0f) {   // South-east
-        memcpy(wind_dir, WIND_DIR_SE, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_SE);
     } else if (wind_direction > 255.0f && wind_direction <= 285.0f) {   // East
-        memcpy(wind_dir, WIND_DIR_E, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_E);
     } else {                                                            // North-east
-        memcpy(wind_dir, WIND_DIR_NE, 3);
+        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_NE);
     }
 
     ESP_LOGI(TAG_INFO, "Got current conditions");
@@ -820,11 +817,8 @@ bool update_forecast() {
 
 	char request_url[REQUEST_URL_BUFFER_SIZE];
 	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
-	strcat(request_url, API_HOST);
-	strcat(request_url, NWS_API_POINTS_URL_PART);
-	strcat(request_url, LATITUDE);
-	strcat(request_url, LAT_LONG_DELIM);
-	strcat(request_url, LONGITUDE);
+    snprintf(request_url, REQUEST_URL_BUFFER_SIZE, "%s%s%s%s%s", API_HOST, NWS_API_POINTS_URL_PART, LATITUDE, 
+        LAT_LONG_DELIM, LONGITUDE);
 
     // Configure the HTTP client.
     config.url = request_url;
@@ -847,7 +841,7 @@ bool update_forecast() {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse forecast JSON");
         return false;
-    }
+    }option_size
     cJSON *cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
     if (cjson_properties == NULL) {
         error_bits = ERROR_SP_JSON;
@@ -861,7 +855,7 @@ bool update_forecast() {
         return false;
     }
     memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
-    memcpy(request_url, cJSON_GetStringValue(cjson_forecast), REQUEST_URL_BUFFER_SIZE);
+    snprintf(request_url, REQUEST_URL_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_forecast));
     
     cJSON_Delete(cjson_root);
 
@@ -1103,7 +1097,7 @@ void draw_menu_view() {
 	uint8_t i = 0;
     uint32_t color;
 	while (temp_curr_menu_node != NULL && i < MENU_MAX_OPTIONS_DISPLAYED) {
-		strcat(option, temp_curr_menu_node->data);
+        snprintf(option, option_size, "%s", temp_curr_menu_node->data);
         
 		if (temp_curr_menu_node == curr_menu_node) {
             strcat(option, cursor);
