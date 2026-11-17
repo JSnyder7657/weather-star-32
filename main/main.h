@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <shiftregister_gpio.h>
 #include <semaphore.h>
+#include <cJSON.h>
 #include "dgx_image.h"
 #include "dgx_bits.h"
 #include "iot_button.h"
@@ -28,10 +29,6 @@
 #define NWS_API_OBSERVATIONS_LATEST_URL_PART    "/observations/latest"
 #define NWS_API_MESSAGE_TYPE_ALERT  "Alert"
 
-// Time API stsring constants
-#define TIME_ZONE   "America/New_York"
-#define TIME_API_URL    "https://timeapi.io/api/time/current/zone?timeZone=" TIME_ZONE
-
 // JSON string constants
 #define JSON_PROPERTIES "properties"
 #define JSON_OBSERVATION_STATIONS   "observationStations"
@@ -44,6 +41,13 @@
 #define JSON_FORECAST   "forecast"
 #define JSON_PERIODS    "periods"
 #define JSON_IS_DAYTIME    "isDaytime"
+#define JSON_FEATURES "features"
+#define JSON_EXTREME  "extreme"
+#define JSON_SEVERE "severe"
+#define JSON_MODERATE "moderate"
+#define JSON_SEVERITY   "severity"
+#define JSON_EVENT  "event"
+#define JSON_DATE_TIME  "dateTime"
 
 // Logging string constants
 #define TAG_HTTP_GET    "http_get"
@@ -59,6 +63,8 @@
 #define MENU_OPTION_PARTLY_CLOUDY "Partly Cloudy"
 #define MENU_OPTION_SCATTERED_SHOWERS "Scattered Showers"
 #define MENU_OPTION_THUNDERSTORM  "Thunderstorm"
+#define MENU_OPTION_TORNADO_WARNING "Tornado Warning"
+#define MENU_OPTION_TORNADO_WATCH "Tornado Watch"
 
 // State constants
 #define STATE_CC  UINT8_C(0)
@@ -83,6 +89,8 @@
 
 // UI string constants
 #define HEADER_CURR_CONDITIONS   "Current Conditions"
+#define FOOTER_WS32 "Weather Star 32"
+#define FOOTER_BY "Joshua Snyder"
 
 // Pin constants
 const gpio_num_t PIN_MENU = (gpio_num_t) GPIO_NUM_33;
@@ -98,16 +106,26 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 
 // API constants
 #define HTTP_GET_RESPONSE_BUFFER_SIZE   UINT16_C(32768)
-#define DATE_TIME_BUFFER_SIZE   UINT8_C(11)
-#define MAX_REQUEST_URL_SIZE    UINT8_C(1024)
-#define MAX_OB_STN_SIZE UINT8_C(255)
+#define DATE_BUFFER_SIZE   UINT8_C(32)
+#define TIME_BUFFER_SIZE  UINT8_C(8)
+#define ALERT_EVENT_BUFFER_SIZE UINT8_C(32)
+#define REQUEST_URL_BUFFER_SIZE    UINT8_C(1024)
+#define OB_STN_BUFFER_SIZE UINT8_C(255)
+#define SEVERITY_BUFFER_SIZE UINT8_C(16)
+#define DATE_TIME_STRING_BUFFER_SIZE  UINT16_C(32)
+#define TIME_ZONE "EST5EDT,M3.2.0,M11.1.0"
+#define DATE_TIME_STRING_FORMAT "%Y-%m-%dT%H:%M:%S"
 
 // Menu constants
-#define MAX_MENU_NODE_DATA_CHARS    UINT8_C(50)
+#define MENU_JSON_STR "{\"Menu\":{\"Back\":0,\"Settings\":{\"Back\":0},\"Tests\":{\"Back\":0,\"EAS\":[\"Back\",\"Blizzard Watch\",\"Blizzard Warning\",\"Severe T'storm Watch\",\"Severe T'storm Warning\",\"Tornado Watch\",\"Tornado Warning\"],\"Current Conditions\":[\"Back\",\"Clear\",\"Cloudy\",\"Partly Cloudy\",\"Scattered Showers\",\"Thunderstorm\"]},\"View System Info\":0,\"Clear Error Code\":0}}"
+#define MENU_NODE_DATA_BUFFER_SIZE  UINT8_C(50)
+#define MENU_OPTION_BUFFER_SIZE UINT8_C(50)
 #define MENU_OPTIONS_X  INT16_C(5)
 #define MENU_MAX_OPTIONS_DISPLAYED  UINT8_C(6)
 #define MENU_OPTIONS_OFFSET UINT8_C(20)
-#define MENU_MAX_OPTION_CHARS UINT8_C(50)
+
+// System info constants
+#define HEAP_SIZE_BUFFER_SIZE UINT8_C(32)
 
 // Buzzer constants
 const uint16_t EAS_TONE_FREQ_1 = 850;
@@ -122,8 +140,10 @@ const uint8_t TEXT_SIZE = 2;
 const uint8_t SHADOW_OFFSET = 2;
 
 // Weather data constants
-#define MAX_DESC_CHARS  UINT8_C(255)
-#define MAX_WIND_DIR_SIZE    UINT8_C(3)
+#define DESC_BUFFER_SIZE  UINT8_C(255)
+#define WIND_DIR_BUFFER_SIZE UINT8_C(3)
+#define ALERT_CYCLE_MS  UINT16_C(50000)
+#define GENERIC_ALERT_EVENT "Check local news"
 
 // Refresh time constants
 const uint64_t FORECAST_REFRESH_TIME_MS = 28800000;
@@ -842,10 +862,22 @@ const uint16_t unknown_bitmap[] = {
 //*********************************************************************************************************************
 
 struct MenuNode {
-	char data[MAX_MENU_NODE_DATA_CHARS];
+	char data[MENU_NODE_DATA_BUFFER_SIZE];
 	struct MenuNode *first_child;
 	struct MenuNode *next_sibling;
 	struct MenuNode *prev_sibling;
+};
+
+struct AlertNode {
+  char data[MENU_NODE_DATA_BUFFER_SIZE];
+  char severity[SEVERITY_BUFFER_SIZE];
+  time_t expire_time;
+  struct AlertNode *next_node;
+};
+
+struct AlertList {
+  struct AlertNode *root_node;
+  struct AlertNode *curr_node;
 };
 
 // Global vars
@@ -862,15 +894,19 @@ dgx_bus_protocols_t *bus;
 dgx_screen_t *tft;
 
 // Date and time
-char date[DATE_TIME_BUFFER_SIZE], time_[DATE_TIME_BUFFER_SIZE];
+char date[DATE_BUFFER_SIZE], time_[TIME_BUFFER_SIZE];
 int curr_day = 0;
 int prev_day = -1;
+time_t curr_time_utc;
 
 // Weather data
 int temperature, wind_direction, high_temperature = 0;
 char temperature_char = 'C';
-char cc_desc[MAX_DESC_CHARS], wind_dir[MAX_WIND_DIR_SIZE];
+char cc_desc[DESC_BUFFER_SIZE], wind_dir[WIND_DIR_BUFFER_SIZE];
 float wind_speed, dew_point = 0.0f;
+
+// Alert list (singly linked list)
+struct AlertList alert_list;
 
 // Menu variables
 uint8_t curr_state = STATE_CC;
@@ -902,15 +938,18 @@ bool play_eas_tone = false;
 
 uint16_t fast_blend(uint8_t alpha, uint32_t fgc, uint32_t bgc);
 void fill_rect_v_gradient(int16_t x, int16_t y, int w, int h, uint32_t color_1, uint32_t color_2);
+
 char* string_to_lower(const char *str);
 bool compare_strings(const char *str_1, const char *str_2, int usr_comp_size);
 bool string_contains(const char *str_1, const char *str_2);
 
 //*********************************************************************************************************************
 
+bool add_test_alert(const char *event, const char *severity);
+
 struct MenuNode* find_grandparent_node(struct MenuNode *node, struct MenuNode *grandparent_node);
 void perform_menu_action();
-struct MenuNode* create_menu_node(const char *data);
+struct MenuNode* create_menu_nodes(cJSON *curr_json, struct MenuNode *parent_node, bool is_array);
 
 //*********************************************************************************************************************
 
@@ -922,6 +961,7 @@ void draw_header_rect();
 void draw_string(const char *str, int16_t x, int16_t y, uint32_t color, int scale);
 void draw_header_string(const char *str);
 void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale);
+void draw_alert(struct AlertNode *alert);
 
 void draw_cloud(int x, int y, uint32_t color);
 void draw_sun(int x, int y, int scale);
@@ -941,11 +981,18 @@ bool get_bit_val_at_pos(uint8_t num, uint8_t bit_pos);
 
 //*********************************************************************************************************************
 
-void set_temperature_val(int *temperature_val);
+bool add_alert(const char *event, const char *alert_exp_date_time, const char *severity);
+bool remove_expired_alerts();
+bool set_curr_alert();
+
+//*********************************************************************************************************************
+
+void set_int_temperature_val(int *temperature_val);
 void set_float_temperature_val(float *temperature_val);
 
-bool update_time(void);
+bool update_time();
 bool update_current_conditions();
+bool update_alerts();
 bool update_seven_seg();
 void update_menu(bool menu, bool menu_up, bool menu_down);
 
@@ -953,14 +1000,20 @@ void update_menu(bool menu, bool menu_up, bool menu_down);
 
 void draw_cc_view();
 void draw_menu_view();
+void draw_si_view();
+void draw_curr_alert();
 
 //*********************************************************************************************************************
 
-void http_get_time(void *arg);
 void http_get_current_conditions(void *arg);
 void http_get_forecast(void *arg);
+void http_get_alerts(void *arg);
+
+void get_time(void *arg);
+
 void check_error_bits(void *arg);
 void check_and_update_display(void *arg);
+void check_for_alerts(void *arg);
 
 void menu_btn_event(void *arg, void *usr_data);
 void menu_up_btn_event(void *arg, void *usr_data);
@@ -975,5 +1028,6 @@ void init_pins();
 void init_display();
 void init_menu();
 void init_buzzers();
+void init_clock();
 
 #endif

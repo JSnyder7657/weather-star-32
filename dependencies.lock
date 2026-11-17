@@ -31,8 +31,18 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 4.2.3
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~2
   espressif/cmake_utilities:
-    component_hash: 14331983a694a3883fa9261aa60a185799500360913b8e14623078912651e6f2
+    component_hash: afc935d5a93cda71ce3223b817de128d07484439d585e6fe613bde820e17f36a
     dependencies:
     - name: idf
       require: private
@@ -40,7 +50,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.4.0
+    version: 1.4.1
   espressif/ethernet_init:
     component_hash: 6268f857d06a1c414d38d38d74632e0d94074f8f653106bfa4a1d475a74f8fe0
     dependencies:
@@ -180,29 +190,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.4.1
-  espressif/jsmn:
-    component_hash: 9b2f6ba1e0fdac1a25e8f1b5a03bfbc8069b43980c62bba225d521ee6cefc6d0
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.3'
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 1.2.0
-  espressif/json_parser:
-    component_hash: 7a764bd9a057cacc93ccabefeca4cdc6ae558790582af9a639acdd015d5103ae
-    dependencies:
-    - name: espressif/jsmn
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=5.0
-      version: ~1.2
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 2.0.0
   idf:
     source:
       type: idf
@@ -230,9 +217,9 @@ dependencies:
 direct_dependencies:
 - esp-idf-lib/shiftregister
 - espressif/button
-- espressif/json_parser
+- espressif/cjson
 - jef-sure/dgx
 - protocol_examples_common
-manifest_hash: 2c033e14326d4a4647722452d4e0b72c172508f166eb7ab57efb2558fc00b872
+manifest_hash: e46d08d1f4e1600c72d304ed2153c0cfd28d1fb66bdc3e1acd6f896ea48711ba
 target: esp32
 version: 3.0.0

@@ -1,6 +1,12 @@
+/**
+ * TODO
+ * [ ] Figure out seg fault issue when adding test alerts
+ */
+
 #include <string.h>
 #include <shiftregister_gpio.h>
 #include <semaphore.h>
+#include <cJSON.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -19,11 +25,11 @@
 #include "dgx_draw.h"
 #include "dgx_font.h"
 #include "fonts/DroidSansRegular9.h"
-#include "json_parser.h"
 #include "main.h"
 #include "drivers/vscreen.h"
 #include "iot_button.h"
 #include "button_gpio.h"
+#include "esp_netif_sntp.h"
 
 //*********************************************************************************************************************
 
@@ -101,6 +107,30 @@ bool string_contains(const char *str_1, const char *str_2) {
 
 //*********************************************************************************************************************
 
+bool add_test_alert(const char *event, const char *severity) {
+    // Get the current local timestamp.
+    time_t timestamp;
+    time(&timestamp);
+    struct tm utc_date_time_tm = {0};
+    if (gmtime_r(&timestamp, &utc_date_time_tm) == NULL) {
+        error_bits = ERROR_TIME_API_GET;
+        ESP_LOGE(TAG_ERROR, "Error setting UTC time.");
+        return false;
+    }
+    time_t time_utc = mktime(&utc_date_time_tm);
+    time_utc += 1200;
+    if (gmtime_r(&time_utc, &utc_date_time_tm) == NULL) {
+        error_bits = ERROR_TIME_API_GET;
+        ESP_LOGE(TAG_ERROR, "Error setting UTC time.");
+        return false;
+    }
+
+    char date_time[DATE_TIME_STRING_BUFFER_SIZE];
+    strftime(date_time, DATE_TIME_STRING_BUFFER_SIZE, DATE_TIME_STRING_FORMAT, &utc_date_time_tm);
+
+    return add_alert(event, date_time, severity);
+}
+
 struct MenuNode* find_grandparent_node(struct MenuNode *node, struct MenuNode *grandparent_node) {
     if (node == NULL) return NULL;
 	if (node == curr_parent_node) return grandparent_node;
@@ -141,35 +171,62 @@ void perform_menu_action() {
         refresh_display = true;
 	} else if (compare_strings(MENU_OPTION_CLEAR_ERROR_CODE, curr_menu_node->data, -1)) {
         error_bits = 0b00000000;
+    } else if (compare_strings(MENU_OPTION_SYSTEM_INFO, curr_menu_node->data, -1)) {
+        curr_state = STATE_SI;
+        refresh_display = true; 
     } else if (compare_strings(MENU_OPTION_CLEAR, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, MAX_DESC_CHARS);
-        memcpy(cc_desc, CC_CLEAR, MAX_DESC_CHARS);
+        memset(cc_desc, 0, DESC_BUFFER_SIZE);
+        memcpy(cc_desc, CC_CLEAR, DESC_BUFFER_SIZE);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_CLOUDY, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, MAX_DESC_CHARS);
-        memcpy(cc_desc, MENU_OPTION_CLOUDY, MAX_DESC_CHARS);
+        memset(cc_desc, 0, DESC_BUFFER_SIZE);
+        memcpy(cc_desc, MENU_OPTION_CLOUDY, DESC_BUFFER_SIZE);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_PARTLY_CLOUDY, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, MAX_DESC_CHARS);
-        memcpy(cc_desc, MENU_OPTION_PARTLY_CLOUDY, MAX_DESC_CHARS);
+        memset(cc_desc, 0, DESC_BUFFER_SIZE);
+        memcpy(cc_desc, MENU_OPTION_PARTLY_CLOUDY, DESC_BUFFER_SIZE);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_SCATTERED_SHOWERS, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, MAX_DESC_CHARS);
-        memcpy(cc_desc, MENU_OPTION_SCATTERED_SHOWERS, MAX_DESC_CHARS);
+        memset(cc_desc, 0, DESC_BUFFER_SIZE);
+        memcpy(cc_desc, MENU_OPTION_SCATTERED_SHOWERS, DESC_BUFFER_SIZE);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_THUNDERSTORM, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, MAX_DESC_CHARS);
-        memcpy(cc_desc, MENU_OPTION_THUNDERSTORM, MAX_DESC_CHARS);
+        memset(cc_desc, 0, DESC_BUFFER_SIZE);
+        memcpy(cc_desc, MENU_OPTION_THUNDERSTORM, DESC_BUFFER_SIZE);
+        exit_menu();
+    } else if (compare_strings(MENU_OPTION_TORNADO_WARNING, curr_menu_node->data, -1)) {
+        add_test_alert(MENU_OPTION_TORNADO_WARNING, JSON_EXTREME);
         exit_menu();
     }
 }
 
-struct MenuNode* create_menu_node(const char *data) {
-	struct MenuNode *new_node = (struct MenuNode*) malloc(sizeof(struct MenuNode));
-	memset(new_node, 0, sizeof(struct MenuNode));
-	memcpy(new_node->data, data, MAX_MENU_NODE_DATA_CHARS);
+struct MenuNode* create_menu_nodes(cJSON *curr_json, struct MenuNode *parent_node, bool part_of_array) {
+    // Create menu node.
+    struct MenuNode *new_node = (struct MenuNode*) calloc(1, sizeof(struct MenuNode));
+    memcpy(new_node->data, part_of_array ? curr_json->valuestring : curr_json->string, MENU_NODE_DATA_BUFFER_SIZE);
+    if (parent_node != NULL && parent_node->first_child == NULL) {
+        parent_node->first_child = new_node;
+    }
 
-	return new_node;
+    // If this is an array or object, we need to iterate through it and create nodes.
+    bool next_parts_in_array = cJSON_IsArray(curr_json);
+    if (part_of_array || !(next_parts_in_array || cJSON_IsObject(curr_json))) {
+        return new_node;
+    }
+
+    cJSON *curr_arr_item = curr_json->child;
+    struct MenuNode *prev_node = NULL;
+    while (curr_arr_item != NULL) {
+        struct MenuNode *new_obj_arr_node = create_menu_nodes(curr_arr_item, new_node, next_parts_in_array);
+        if (prev_node != NULL) {
+            prev_node->next_sibling = new_obj_arr_node;
+            new_obj_arr_node->prev_sibling = prev_node;
+        }
+        prev_node = new_obj_arr_node;
+        curr_arr_item = curr_arr_item->next;
+    }
+
+    return new_node;
 }
 
 //*********************************************************************************************************************
@@ -216,6 +273,22 @@ void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale)
 
     dgx_screen_t *image = dgx_vscreen_from_array(image_be, size, size, 16, DgxScreenRGB);
     dgx_vscreen_to_screen(tft, x, y, image, DGX_VSCREEN_SCALE(scale) | DGX_VSCREEN_TRANSPARENT);
+}
+
+void draw_alert(struct AlertNode *alert) {
+    // Determine the banner color.
+    uint32_t color;
+    if (compare_strings(JSON_EXTREME, alert->severity, -1)) {
+        color = DGX_RED(dgx_rgb_to_16);
+    } else if (compare_strings(JSON_SEVERE, alert->severity, -1)) {
+        color = DGX_ORANGE(dgx_rgb_to_16);
+    } else {
+        color = DGX_YELLOW(dgx_rgb_to_16);
+    }
+
+    // We don't need to clear the screen since we want the banner to display on top of anything on screen.
+    dgx_fill_rectangle(tft, 0, 0, tft->width, 30, color);
+    draw_string(alert->data, 0, 20, DGX_WHITE(dgx_rgb_to_16), 2);
 }
 
 void draw_cloud(int x, int y, uint32_t color) {
@@ -278,6 +351,72 @@ bool get_bit_val_at_pos(uint8_t num, uint8_t bit_pos) {
 
 //*********************************************************************************************************************
 
+bool add_alert(const char *event, const char *alert_exp_date_time, const char *severity) {
+    struct tm tm;
+    strptime(alert_exp_date_time, DATE_TIME_STRING_FORMAT, &tm);
+
+    struct AlertNode *new_node = (struct AlertNode*) malloc(sizeof(struct AlertNode));
+    memcpy(new_node->data, event, MENU_NODE_DATA_BUFFER_SIZE);
+    memcpy(new_node->severity, severity, SEVERITY_BUFFER_SIZE);
+    new_node->expire_time = timegm(&tm);
+    
+    if (alert_list.root_node == NULL) {
+        alert_list.root_node = new_node;
+    } else {
+        struct AlertNode *temp_node = alert_list.root_node;
+        while (temp_node->next_node != NULL) {
+            temp_node = temp_node->next_node;
+        }
+        temp_node->next_node = new_node;
+    }
+
+    ESP_LOGI(TAG_INFO, "Added test alert.");
+
+    return true;
+}
+
+bool remove_expired_alerts() {
+    if (alert_list.root_node == NULL) {
+        return false;
+    }
+
+    struct AlertNode *temp_node = alert_list.root_node;
+    struct AlertNode *placeholder_node, *prev_node = NULL;
+    while (temp_node != NULL) {
+        if (curr_time_utc <= alert_list.root_node->expire_time) {
+            prev_node = temp_node;
+            temp_node = temp_node->next_node;
+            continue;
+        }
+        placeholder_node = temp_node->next_node;
+        if (prev_node == NULL) {
+            alert_list.root_node = placeholder_node;
+        } else {
+            prev_node->next_node = placeholder_node;
+        }
+        free(temp_node);
+        temp_node = placeholder_node;
+    }
+
+    return true;
+}
+
+bool set_curr_alert() {
+    if (alert_list.root_node == NULL) {
+        return false;
+    } else if (alert_list.curr_node == NULL) {
+        alert_list.curr_node = alert_list.root_node;
+        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.root_node");
+    } else {
+        alert_list.curr_node = alert_list.curr_node->next_node;
+        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.curr_node->next_node");
+    }
+
+    return true;
+}
+
+//*********************************************************************************************************************
+
 void set_int_temperature_val(int *temperature_val) {
     if (DEG_F) {
         *temperature_val = (*temperature_val * 1.8) + 32;
@@ -292,48 +431,31 @@ void set_float_temperature_val(float *temperature_val) {
     ESP_LOGI(TAG_INFO, "Float: %.f", *temperature_val);
 }
 
-bool update_time(void) {
-    ESP_LOGI(TAG_INFO, "Getting time ...");
+bool update_time() {
+    ESP_LOGI(TAG_INFO, "Updating time ...");
 
-    // Reset response buffer;
-    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
-
-    // Configure HTTP client
-    config.url = TIME_API_URL;
-    config.event_handler = http_event_handler;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-
-    // Initialize HTTP client and perform the HTTP GET request
-    client = esp_http_client_init(&config);
-    esp_err_t err = esp_http_client_perform(client);
-    if (err != ESP_OK || esp_http_client_get_status_code(client) != 200) {
+    // Get the current local timestamp.
+    time_t local_timestamp;
+    time(&local_timestamp);
+    struct tm local_date_time_tm = {0};
+    if (localtime_r(&local_timestamp, &local_date_time_tm) == NULL) {
         error_bits = ERROR_TIME_API_GET;
-        ESP_LOGE(TAG_HTTP_GET, "HTTP request failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG_ERROR, "Error setting local time.");
         return false;
     }
 
-    jparse_ctx_t jparse_ctx;
-    if (json_parse_start(&jparse_ctx, http_response_buffer, http_response_buffer_len) != OS_SUCCESS) {
-        error_bits = ERROR_SP_JSON;
-        ESP_LOGE(TAG_ERROR, "Error starting time JSON parsing.");
+    // Now get the UTC timestamp so we can keep track of it for the alerts.
+    struct tm utc_date_time_tm = {0};
+    if (gmtime_r(&local_timestamp, &utc_date_time_tm) == NULL) {
+        error_bits = ERROR_TIME_API_GET;
+        ESP_LOGE(TAG_ERROR, "Error setting UTC time.");
         return false;
     }
-    if (!(json_obj_get_string(&jparse_ctx, "date", date, DATE_TIME_BUFFER_SIZE) == OS_SUCCESS &&
-            json_obj_get_string(&jparse_ctx, "time", time_, DATE_TIME_BUFFER_SIZE) == OS_SUCCESS)) {
-            error_bits = ERROR_P_JSON;
-            ESP_LOGE(TAG_ERROR, "Error parsing time JSON.");
-            return false;
-    }
-    if (json_obj_get_int(&jparse_ctx, "day", &curr_day) != OS_SUCCESS) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error parsing time JSON.");
-        return false;
-    }
-    if (json_parse_end(&jparse_ctx) != OS_SUCCESS) {
-        error_bits = ERROR_EP_JSON;
-        ESP_LOGE(TAG_ERROR, "Error ending time JSON parsing.");
-        return false;
-    }
+    curr_time_utc = mktime(&utc_date_time_tm);
+
+    // Update the local date and time strings to display.
+    strftime(date, DATE_BUFFER_SIZE, "%m/%d/%Y", &local_date_time_tm);
+    strftime(time_, TIME_BUFFER_SIZE, "%H:%M", &local_date_time_tm);
 
     ESP_LOGI(TAG_INFO, "Got time.");
     
@@ -343,22 +465,139 @@ bool update_time(void) {
     return true;
 }
 
+bool update_alerts() {
+    ESP_LOGI(TAG_INFO, "Deleting any expired alerts ...");
+    if (remove_expired_alerts()) {
+        ESP_LOGI(TAG_INFO, "Removed expired alerts.");
+    }
+
+    ESP_LOGI(TAG_INFO, "Getting alerts ...");
+
+	size_t request_url_size = strlen(API_HOST) + strlen(NWS_API_ALERTS_URL_PART) + strlen(PARAM_START) 
+        + strlen(NWS_API_URL_POINT_PARAM) + strlen(LATITUDE) + strlen(LAT_LONG_DELIM) + strlen(LONGITUDE) + 1;
+    if (request_url_size > REQUEST_URL_BUFFER_SIZE) {
+        error_bits = ERROR_REQUEST_URL_LIMIT;
+        ESP_LOGE(TAG_ERROR, "The request URL for init exceeds the allowed number of bytes.");
+    }
+
+    char request_url[REQUEST_URL_BUFFER_SIZE];
+	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
+	strcat(request_url, API_HOST);
+	strcat(request_url, NWS_API_ALERTS_URL_PART);
+	strcat(request_url, PARAM_START);
+	strcat(request_url, NWS_API_URL_POINT_PARAM);
+	strcat(request_url, LATITUDE);
+	strcat(request_url, LAT_LONG_DELIM);
+	strcat(request_url, LONGITUDE);
+
+    // Configure HTTP client
+    config.url = request_url;
+
+    // Initialize HTTP client and perform the HTTP GET request
+    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK || esp_http_client_get_status_code(client) != 200) {
+        error_bits = ERROR_NWS_API_GET;
+        ESP_LOGE(TAG_HTTP_GET, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    esp_http_client_cleanup(client);
+
+    cJSON *cjson_root = cJSON_Parse(http_response_buffer);
+    if (cjson_root == NULL) {
+        error_bits = ERROR_SP_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing alerts JSON.");
+        cJSON_Delete(cjson_root);        
+        return false;
+    }
+
+    // Get the features array that contains the alerts and parse them into alerts.
+    cJSON *cjson_features = cJSON_GetObjectItem(cjson_root, JSON_FEATURES);
+    if (cjson_features == NULL) {
+        error_bits = ERROR_SP_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing features from alerts JSON.");
+        cJSON_Delete(cjson_root);
+        return false;
+    }
+
+    bool alerts_added = false;
+    char severity[SEVERITY_BUFFER_SIZE];
+    char alert[MENU_NODE_DATA_BUFFER_SIZE];
+    char alert_exp_date_time[DATE_TIME_STRING_BUFFER_SIZE];
+    cJSON *cjson_arr_item_obj = NULL;
+    cJSON *cjson_obj_item;
+    uint32_t i;
+    int count = cJSON_GetArraySize(cjson_features);
+    for (i = 0; i < count ; i++) {
+        // Get the severity.
+        cjson_arr_item_obj = cJSON_GetArrayItem(cjson_features, i);
+        if (cjson_arr_item_obj == NULL) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing features array element from alert JSON.");
+            continue;
+        }
+        cjson_obj_item = cJSON_GetObjectItem(cjson_arr_item_obj, JSON_SEVERITY);
+        if (cjson_obj_item == NULL) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing features array element from alert JSON.");
+            continue;
+        }
+        memset(severity, 0, SEVERITY_BUFFER_SIZE);
+        memcpy(severity, cJSON_GetStringValue(cjson_obj_item), SEVERITY_BUFFER_SIZE);
+
+        // Determine what to do depending on the severity of the alert.
+        if (compare_strings(JSON_EXTREME, severity, -1) || compare_strings(JSON_SEVERE, severity, -1) 
+            || compare_strings(JSON_MODERATE, severity, -1)) {
+            // Get the event.
+            cjson_obj_item = cJSON_GetObjectItem(cjson_arr_item_obj, JSON_EVENT);
+
+            memset(alert, 0, MENU_NODE_DATA_BUFFER_SIZE);
+            if (cjson_obj_item == NULL) {
+                // In this case, there's an alert but we failed to parse it. Alerts are important, so lets add a 
+                // placeholder value here instead.
+                memcpy(alert, GENERIC_ALERT_EVENT, MENU_NODE_DATA_BUFFER_SIZE);
+            } else {
+                memcpy(alert, cJSON_GetStringValue(cjson_obj_item), MENU_NODE_DATA_BUFFER_SIZE);
+            }
+
+            // Get the expiration date and time.
+            cjson_obj_item = cJSON_GetObjectItem(cjson_arr_item_obj, JSON_DATE_TIME);
+            if (cjson_obj_item == NULL) {
+                error_bits = ERROR_P_JSON;
+                ESP_LOGE(TAG_ERROR, "Error parsing features array element from alert JSON.");
+                continue;
+            }
+            memset(alert_exp_date_time, 0, DATE_TIME_STRING_BUFFER_SIZE);
+            memcpy(alert_exp_date_time, cJSON_GetStringValue(cjson_arr_item_obj), DATE_TIME_STRING_BUFFER_SIZE);
+
+            // Finally, add the alert to the alert list.
+            add_alert(alert, alert_exp_date_time, severity);
+            alerts_added = true;
+        }
+    }
+
+    cJSON_Delete(cjson_root);
+
+    return alerts_added;
+}
+
 bool update_curr_conditions() {
     ESP_LOGI(TAG_INFO, "Getting current conditions ...");
 
     // Set the temperature char.
     temperature_char = DEG_F ? 'F' : 'C';
 
-    // Configure the HTTP client.
+    // Set up the request URL.
 	size_t request_url_size = strlen(API_HOST) + strlen(NWS_API_POINTS_URL_PART) + strlen(LATITUDE) 
         + strlen(LAT_LONG_DELIM) + strlen(LONGITUDE) + 1;
-    if (request_url_size > MAX_REQUEST_URL_SIZE) {
+    if (request_url_size > REQUEST_URL_BUFFER_SIZE) {
         error_bits = ERROR_REQUEST_URL_LIMIT;
         ESP_LOGE(TAG_ERROR, "The request URL for init exceeds the allowed number of bytes.");
     }
-
-	char request_url[MAX_REQUEST_URL_SIZE];
-	memset(request_url, 0, MAX_REQUEST_URL_SIZE);
+	char request_url[REQUEST_URL_BUFFER_SIZE];
+	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
 	strcat(request_url, API_HOST);
 	strcat(request_url, NWS_API_POINTS_URL_PART);
 	strcat(request_url, LATITUDE);
@@ -367,94 +606,100 @@ bool update_curr_conditions() {
 
     // Configure HTTP client
     config.url = request_url;
-    config.event_handler = http_event_handler;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-
-    // Reset response buffer;
-    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
 
     // Initialize HTTP client and perform the HTTP GET request
+    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_err_t err = esp_http_client_perform(client);
     if (err != ESP_OK || esp_http_client_get_status_code(client) != 200) {
         error_bits = ERROR_NWS_API_GET;
         ESP_LOGE(TAG_HTTP_GET, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
     }
     esp_http_client_cleanup(client);
 
-    jparse_ctx_t jparse_ctx;
-    int ret;
-    if ((ret = json_parse_start(&jparse_ctx, http_response_buffer, http_response_buffer_len)) != OS_SUCCESS) {
-        error_bits = ERROR_SP_JSON;
-        ESP_LOGE(TAG_ERROR, "json_parse_start failed (ret=%d, len=%d) 1", ret, http_response_buffer_len);
-    }
-
-    char ob_stations_url_raw[MAX_OB_STN_SIZE];
-    memset(ob_stations_url_raw, 0, MAX_OB_STN_SIZE);
-    bool ok = json_obj_get_object(&jparse_ctx, JSON_PROPERTIES) == OS_SUCCESS && 
-        json_obj_get_string(&jparse_ctx, JSON_OBSERVATION_STATIONS, ob_stations_url_raw, MAX_OB_STN_SIZE) == OS_SUCCESS;
-    if (!ok) {
+    // Get the properties object and it's value.
+    cJSON *cjson_root = cJSON_Parse(http_response_buffer);
+    
+    char ob_stations_url_raw[OB_STN_BUFFER_SIZE];
+    memset(ob_stations_url_raw, 0, OB_STN_BUFFER_SIZE);
+    cJSON *cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
+    if (cjson_properties == NULL) {
         error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error parsing initial JSON.");
+        ESP_LOGE(TAG_ERROR, "Error parsing initial properties JSON.");
+        cJSON_Delete(cjson_root);
+        return false;
     }
-    if (json_parse_end(&jparse_ctx) != OS_SUCCESS) {
-        error_bits = ERROR_EP_JSON;
-        ESP_LOGE(TAG_ERROR, "Error ending initial JSON parsing.");
+    char *val = cJSON_GetStringValue(cJSON_GetObjectItem(cjson_properties, JSON_OBSERVATION_STATIONS)); 
+    if (val == NULL) {
+        error_bits = ERROR_P_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing observation stations JSON.");
+        cJSON_Delete(cjson_root);
+        return false;
     }
+    memcpy(ob_stations_url_raw, val, OB_STN_BUFFER_SIZE);
+
+    cJSON_Delete(cjson_root);
 
 	// Make another request to actually get the current observations now that we have the URL.
-	size_t ob_stations_url_size = MAX_OB_STN_SIZE + strlen(PARAM_START) + strlen(NWS_API_URL_PART_LIMIT_PARAM) + 
+	size_t ob_stations_url_size = OB_STN_BUFFER_SIZE + strlen(PARAM_START) + strlen(NWS_API_URL_PART_LIMIT_PARAM) + 
         strlen(NWS_API_ITEM_LIMIT) + strlen(NWS_API_ITEM_LIMIT) + 1;
-    if (ob_stations_url_size > MAX_REQUEST_URL_SIZE) {
+    if (ob_stations_url_size > REQUEST_URL_BUFFER_SIZE) {
         error_bits = ERROR_REQUEST_URL_LIMIT;
         ESP_LOGE(TAG_ERROR, "The request URL for ob stations exceeds the allowed number of bytes.");
+        return false;
     }
-
-	memset(request_url, 0, MAX_REQUEST_URL_SIZE);
+	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
 	strcat(request_url, ob_stations_url_raw);
 	strcat(request_url, PARAM_START);
 	strcat(request_url, NWS_API_URL_PART_LIMIT_PARAM);
 	strcat(request_url, NWS_API_ITEM_LIMIT);
-
-    // Reset response buffer;
-    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
     
     // Initialize HTTP client and perform the HTTP GET request
+    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
     client = esp_http_client_init(&config);
     err = esp_http_client_perform(client);
     if (err != ESP_OK || esp_http_client_get_status_code(client) != 200) {
         error_bits = ERROR_NWS_API_GET;
         ESP_LOGE(TAG_HTTP_GET, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
     }
     esp_http_client_cleanup(client);
-
-    if (json_parse_start(&jparse_ctx, http_response_buffer, http_response_buffer_len) != OS_SUCCESS) {
-        error_bits = ERROR_SP_JSON;
-        ESP_LOGE(TAG_ERROR, "Error starting ob station JSON parsing.");
-    }
-    int num_elem = 1;
-    char stations_request_str_raw[MAX_DESC_CHARS];
-    memset(stations_request_str_raw, 0, MAX_DESC_CHARS);
-    ok = json_obj_get_array(&jparse_ctx, JSON_OBSERVATION_STATIONS, &num_elem) == OS_SUCCESS && 
-        json_arr_get_string(&jparse_ctx, 0, stations_request_str_raw, MAX_DESC_CHARS) == OS_SUCCESS;
-    if (!ok){ 
+    
+    // Get the observation stations.
+    cjson_root = cJSON_Parse(http_response_buffer);
+    
+    char stations_request_str_raw[DESC_BUFFER_SIZE];
+    memset(stations_request_str_raw, 0, DESC_BUFFER_SIZE);
+    cJSON *cjson_ob_stations_array = cJSON_GetObjectItem(cjson_root, JSON_OBSERVATION_STATIONS);
+    if (cjson_ob_stations_array == NULL) {
         error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error parsing ob station JSON.");
+        ESP_LOGE(TAG_ERROR, "Error parsing observation station properties JSON.");
+        cJSON_Delete(cjson_root);
+        return false;
     }
-    if (json_parse_end(&jparse_ctx) != OS_SUCCESS) {
-        error_bits = ERROR_EP_JSON;
-        ESP_LOGE(TAG_ERROR, "Error ending ob station JSON parsing.");
+    cJSON *cjson_ob_station = cJSON_GetArrayItem(cjson_ob_stations_array, 0);
+    if (cjson_ob_station == NULL) {
+        error_bits = ERROR_P_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing observation station arrays JSON.");
+        cJSON_Delete(cjson_root);
+        return false;
     }
+    memcpy(stations_request_str_raw, cjson_ob_station->valuestring, DESC_BUFFER_SIZE);
+    
+    cJSON_Delete(cjson_root);
 
     // Finally, make a request to get the latest observations from the station.
-	size_t stations_request_url_size = strlen(stations_request_str_raw) 
-        + strlen(NWS_API_OBSERVATIONS_LATEST_URL_PART) + 1;
-    if (stations_request_url_size > MAX_REQUEST_URL_SIZE) {
+	size_t stations_request_url_size = strlen(stations_request_str_raw) + strlen(NWS_API_OBSERVATIONS_LATEST_URL_PART) 
+        + 1;
+    if (stations_request_url_size > REQUEST_URL_BUFFER_SIZE) {
         error_bits = ERROR_REQUEST_URL_LIMIT;
         ESP_LOGE(TAG_ERROR, "The request URL for stations exceeds the allowed number of bytes.");
+        return false;
     }
-
-	memset(request_url, 0, MAX_REQUEST_URL_SIZE);
+	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
 	strcat(request_url, stations_request_str_raw);
 	strcat(request_url, NWS_API_OBSERVATIONS_LATEST_URL_PART);
 
@@ -467,101 +712,81 @@ bool update_curr_conditions() {
     if (err != ESP_OK || esp_http_client_get_status_code(client) != 200) {
         error_bits = ERROR_NWS_API_GET;
         ESP_LOGE(TAG_HTTP_GET, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
     }
     esp_http_client_cleanup(client);
 
-    // Get temperature data
-    if (json_parse_start(&jparse_ctx, http_response_buffer, http_response_buffer_len) != OS_SUCCESS) {
-        error_bits = ERROR_SP_JSON;
-        ESP_LOGE(TAG_ERROR, "Error starting station JSON parsing.");
-    }
-    
-    bool bool_1 = json_obj_get_object(&jparse_ctx, JSON_PROPERTIES) == OS_SUCCESS;
-    if (!bool_1) {
+    ESP_LOGI(TAG_INFO, "Parsing current conditions ...");
+
+    // Get data for the current conditions.
+    cjson_root = cJSON_Parse(http_response_buffer);
+
+    cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
+    if (cjson_properties == NULL) {
         error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_1.");
-    }
-    bool bool_2 = json_obj_get_string(&jparse_ctx, JSON_TEXT_DESCRIPTION, cc_desc, MAX_DESC_CHARS) == OS_SUCCESS;
-    if (!bool_2) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_2.");
-    }    
-    bool bool_3 = json_obj_get_object(&jparse_ctx, JSON_TEMPERATURE) == OS_SUCCESS;
-    if (!bool_3) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_3.");
-    }    
-    int temp_temperature;
-    bool bool_4 = json_obj_get_int(&jparse_ctx, JSON_VALUE, &temp_temperature) == OS_SUCCESS;
-    if (!bool_4) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_4.");
-    } else {   
-        temperature = temp_temperature;
-        set_int_temperature_val(&temperature); 
+        ESP_LOGE(TAG_ERROR, "Error parsing post properties JSON.");
+        cJSON_Delete(cjson_root);
+        return false;
     }
 
-    bool bool_5 = json_obj_leave_object(&jparse_ctx) == OS_SUCCESS;
-    if (!bool_5) {
+    // Temperature
+    cJSON *cjson_temperature = cJSON_GetObjectItem(cjson_properties, JSON_TEMPERATURE);
+    if (cjson_temperature == NULL) {
         error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_5.");
-    }    
-    bool bool_6 = json_obj_get_object(&jparse_ctx, JSON_WIND_SPEED) == OS_SUCCESS;
-    if (!bool_6) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_6.");
-    }    
-    bool bool_7 = json_obj_get_float(&jparse_ctx, JSON_VALUE, &wind_speed) == OS_SUCCESS;
-    if (!bool_7) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_7.");
-    }    
-    set_float_temperature_val(&dew_point);
-    bool bool_8 = json_obj_leave_object(&jparse_ctx) == OS_SUCCESS;
-    if (!bool_8) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_8.");
-    }    
-    bool bool_9 = json_obj_get_object(&jparse_ctx, JSON_WIND_DIR) == OS_SUCCESS;
-    if (!bool_9) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_9.");
-    }    
-    int temp_wind_direction;
-    bool bool_10 = json_obj_get_int(&jparse_ctx, JSON_VALUE, &temp_wind_direction) == OS_SUCCESS;
-    if (!bool_10) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_10.");
+        ESP_LOGE(TAG_ERROR, "Error parsing temperature from JSON.");
     } else {
-        wind_direction = temp_wind_direction;
+        temperature = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_temperature, JSON_VALUE));
+        set_int_temperature_val(&temperature);
+        ESP_LOGI(TAG_INFO, "Set temperature.");
     }
-    bool bool_11 = json_obj_leave_object(&jparse_ctx) == OS_SUCCESS;
-    if (!bool_11) {
+
+    // Description
+    cJSON *cjson_desc = cJSON_GetObjectItem(cjson_properties, JSON_TEXT_DESCRIPTION);
+    if (cjson_desc == NULL) {
         error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_11.");
-    }
-    bool bool_12 = json_obj_get_object(&jparse_ctx, JSON_DEWPOINT) == OS_SUCCESS;
-    if (!bool_12) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_12.");
-    }
-    float temp_dew_point;
-    bool bool_13 = json_obj_get_float(&jparse_ctx, JSON_VALUE, &temp_dew_point) == OS_SUCCESS;
-    if (!bool_13) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error bool_13.");
+        ESP_LOGE(TAG_ERROR, "Error parsing description from JSON.");
     } else {
-        dew_point = temp_dew_point;
+        memset(cc_desc, 0, DESC_BUFFER_SIZE);
+        memcpy(cc_desc, cJSON_GetStringValue(cjson_desc), DESC_BUFFER_SIZE);
+        ESP_LOGI(TAG_INFO, "Set description");
+    }
+
+    // Wind speed
+    cJSON *cjson_wind_speed = cJSON_GetObjectItem(cjson_properties, JSON_WIND_SPEED);
+    if (cjson_wind_speed == NULL) {
+        error_bits = ERROR_P_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing wind speed from JSON.");
+    } else {
+        wind_speed = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_wind_speed, JSON_VALUE));
+        ESP_LOGI(TAG_INFO, "Set wind speed");
+    }
+
+    // Wind direction
+    cJSON *cjson_wind_dir = cJSON_GetObjectItem(cjson_properties, JSON_WIND_DIR);
+    if (cjson_wind_dir == NULL) {
+        error_bits = ERROR_P_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing wind direction from JSON.");
+    } else {
+        wind_direction = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_wind_dir, JSON_VALUE));
+        ESP_LOGI(TAG_INFO, "Wind direction");
+    }
+
+    // Dew point
+    cJSON *cjson_dew_point = cJSON_GetObjectItem(cjson_properties, JSON_DEWPOINT);
+    if (cjson_dew_point == NULL) {
+        error_bits = ERROR_P_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing dew point from JSON.");
+    } else {
+        dew_point = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_dew_point, JSON_VALUE));
         set_float_temperature_val(&dew_point);
+        ESP_LOGI(TAG_INFO, "Set dew point");
     }
 
-    if (json_parse_end(&jparse_ctx) != OS_SUCCESS) {
-        error_bits = ERROR_EP_JSON;
-        ESP_LOGE(TAG_ERROR, "Error ending station JSON parsing.");
-    }
+    cJSON_Delete(cjson_root);
 
     // Calculate the wind direction string
-    memset(wind_dir, 0, MAX_WIND_DIR_SIZE);
+    memset(wind_dir, 0, WIND_DIR_BUFFER_SIZE);
 
     if (wind_direction <= 15.0f || wind_direction > 345.0f) {           // North
         memcpy(wind_dir, WIND_DIR_N, 3);
@@ -592,131 +817,122 @@ bool update_forecast() {
     // Configure the HTTP client.
 	size_t request_url_size = strlen(API_HOST) + strlen(NWS_API_POINTS_URL_PART) + strlen(LATITUDE) 
         + strlen(LAT_LONG_DELIM) + strlen(LONGITUDE) + 1;
-    if (request_url_size > MAX_REQUEST_URL_SIZE) {
+    if (request_url_size > REQUEST_URL_BUFFER_SIZE) {
         error_bits = ERROR_REQUEST_URL_LIMIT;
         ESP_LOGE(TAG_ERROR, "The request URL for init exceeds the allowed number of bytes.");
         return false;
     }
 
-	char request_url[MAX_REQUEST_URL_SIZE];
-	memset(request_url, 0, MAX_REQUEST_URL_SIZE);
+	char request_url[REQUEST_URL_BUFFER_SIZE];
+	memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
 	strcat(request_url, API_HOST);
 	strcat(request_url, NWS_API_POINTS_URL_PART);
 	strcat(request_url, LATITUDE);
 	strcat(request_url, LAT_LONG_DELIM);
 	strcat(request_url, LONGITUDE);
 
-    // Reset response buffer;
-    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
-
     // Configure the HTTP client.
     config.url = request_url;
-    config.event_handler = http_event_handler;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
 
     // Initialize HTTP client and perform the HTTP GET request
+    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_err_t err = esp_http_client_perform(client);
     if (err != ESP_OK || esp_http_client_get_status_code(client) != 200) {
         error_bits = ERROR_NWS_API_GET;
         ESP_LOGE(TAG_HTTP_GET, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
         return false;
     }
     esp_http_client_cleanup(client);
 
-    jparse_ctx_t jparse_ctx;
-    int ret;
-    if ((ret = json_parse_start(&jparse_ctx, http_response_buffer, http_response_buffer_len)) != OS_SUCCESS) {
+    // Get the forecasts URL.
+    cJSON *cjson_root = cJSON_Parse(http_response_buffer);
+    if (cjson_root == NULL) {
         error_bits = ERROR_SP_JSON;
-        ESP_LOGE(TAG_ERROR, "json_parse_start failed (ret=%d, len=%d) 1", ret, http_response_buffer_len);
+        ESP_LOGE(TAG_ERROR, "Failed to parse forecast JSON");
         return false;
     }
-
-    // Get the forecasts URL
-    if (json_obj_get_object(&jparse_ctx, JSON_PROPERTIES) != OS_SUCCESS) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error parsing forecast JSON.");
+    cJSON *cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
+    if (cjson_properties == NULL) {
+        error_bits = ERROR_SP_JSON;
+        ESP_LOGE(TAG_ERROR, "Failed to parse forecast JSON");
         return false;
     }
-
-    memset(request_url, 0, MAX_REQUEST_URL_SIZE);
-    if (json_obj_get_string(&jparse_ctx, JSON_FORECAST, request_url, MAX_REQUEST_URL_SIZE) != OS_SUCCESS) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error parsing forecast JSON \"forecast\".");
+    cJSON *cjson_forecast = cJSON_GetObjectItem(cjson_properties, JSON_FORECAST);
+    if (cjson_forecast == NULL) {
+        error_bits = ERROR_SP_JSON;
+        ESP_LOGE(TAG_ERROR, "Failed to parse forecast item from forecast JSON");
         return false;
     }
-
-    // Reset response buffer.
-    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
-    config.url = request_url;
+    memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
+    memcpy(request_url, cJSON_GetStringValue(cjson_forecast), REQUEST_URL_BUFFER_SIZE);
+    
+    cJSON_Delete(cjson_root);
 
     // Initialize HTTP client and perform the HTTP GET request
+    reset_response_buffer(http_response_buffer, &http_response_buffer_len);
     client = esp_http_client_init(&config);
     err = esp_http_client_perform(client);
     if (err != ESP_OK || esp_http_client_get_status_code(client) != 200) {
         error_bits = ERROR_NWS_API_GET;
         ESP_LOGE(TAG_HTTP_GET, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
         return false;
     }
     esp_http_client_cleanup(client);
 
-    if ((ret = json_parse_start(&jparse_ctx, http_response_buffer, http_response_buffer_len)) != OS_SUCCESS) {
+    // Iterate through the "periods" until we get the first "isDaytTime": true object.
+    cjson_root = cJSON_Parse(http_response_buffer);
+    if (cjson_root == NULL) {
         error_bits = ERROR_SP_JSON;
-        ESP_LOGE(TAG_ERROR, "json_parse_start failed (ret=%d, len=%d) 1", ret, http_response_buffer_len);
+        ESP_LOGE(TAG_ERROR, "Failed to parse forecast response from forecast JSON");
         return false;
     }
-
-    // Iterate through the "periods" until we get the first "isDayTime": true object.
-    if (json_obj_get_object(&jparse_ctx, JSON_PROPERTIES) != OS_SUCCESS) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error parsing forecast JSON \"properties\".");
+    cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
+    if (cjson_properties == NULL) {
+        error_bits = ERROR_SP_JSON;
+        ESP_LOGE(TAG_ERROR, "Failed to parse forecast response properties from forecast JSON");
         return false;
     }
-
-    int num_elements;
-    if (json_obj_get_array(&jparse_ctx, JSON_PERIODS, &num_elements) != OS_SUCCESS) {
-        error_bits = ERROR_P_JSON;
-        ESP_LOGE(TAG_ERROR, "Error parsing forecast JSON \"periods\".");
+    cJSON *cjson_periods_array = cJSON_GetObjectItem(cjson_properties, JSON_PERIODS);
+    if (cjson_periods_array == NULL) {
+        error_bits = ERROR_SP_JSON;
+        ESP_LOGE(TAG_ERROR, "Failed to parse periods array from forecast JSON");
         return false;
     }
-    
+    int count = cJSON_GetArraySize(cjson_periods_array);
     uint32_t i;
-    bool is_daytime = false;
-    for (i = 0; i < num_elements; i++) {
-        if (json_arr_get_object(&jparse_ctx, i) != OS_SUCCESS) {
+    bool is_day_time = false;
+    cJSON *cjson_array_item = NULL;
+    cJSON *cjson_array_obj_item = NULL;
+    for (i = 0; i < count; i++) {
+        cjson_array_item = cJSON_GetArrayItem(cjson_periods_array, i);
+        if (cjson_array_item == NULL) {
             error_bits = ERROR_P_JSON;
-            ESP_LOGI(TAG_ERROR, "%s %i", "Error parsing forecast JSON \"periods\" object.");
+            ESP_LOGI(TAG_ERROR, "%s %i", "Failed parsing periods array from object.");
             return false;
         }
-        if (json_obj_get_bool(&jparse_ctx, JSON_IS_DAYTIME, &is_daytime) != OS_SUCCESS) {
-            error_bits = ERROR_P_JSON;
-            ESP_LOGE(TAG_ERROR, "Error parsing forecast JSON \"isDaytime\".");
-            return false;
-        }
-        if (!is_daytime) {
-            if (json_obj_leave_object(&jparse_ctx) != OS_SUCCESS) {
-                error_bits = ERROR_P_JSON;
-                ESP_LOGE(TAG_ERROR, "Error parsing forecast JSON leaving loop object.");
-                return false;
-            }
+        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_IS_DAYTIME);
+        if (cjson_array_obj_item == NULL || cJSON_IsFalse(cjson_array_obj_item)) {
             continue;
         }
+        is_day_time = true;
         break;
     }
-
-    // We found a daytime object, so grab the temperature from it.
-    if (is_daytime) {
-        int temp_high;
-        if (json_obj_get_int(&jparse_ctx, JSON_TEMPERATURE, &temp_high) != OS_SUCCESS) {
-            error_bits = ERROR_P_JSON;
-            ESP_LOGE(TAG_ERROR, "Error parsing forecast JSON \"temperature\".");
+    if (is_day_time) {
+        cJSON *cjson_temperature = cJSON_GetObjectItem(cjson_array_item, JSON_TEMPERATURE);
+        if (cjson_temperature == NULL) {
+            error_bits = ERROR_SP_JSON;
+            ESP_LOGE(TAG_ERROR, "Failed to parse high temperature from forecast JSON");
             return false;
-        } else {
-            high_temperature = temp_high;
         }
+        high_temperature= cJSON_GetNumberValue(cjson_temperature);
     }
 
-    return is_daytime;
+    cJSON_Delete(cjson_root);
+
+    return is_day_time;
 }
 
 bool update_seven_seg() {
@@ -839,7 +1055,7 @@ void draw_cc_view() {
     draw_string(temp_buff, 250, 130, DGX_WHITE(dgx_rgb_to_16), 3);
 
     // Write the wind data.
-    uint16_t wind_buff_size = 10 + MAX_WIND_DIR_SIZE;
+    uint16_t wind_buff_size = 10 + WIND_DIR_BUFFER_SIZE;
     char wind_buff[wind_buff_size];
     memset(wind_buff, 0, wind_buff_size);
     snprintf(wind_buff, wind_buff_size, "%s %.1f mph", wind_dir, wind_speed);
@@ -884,7 +1100,7 @@ void draw_menu_view() {
 	// Show each of the options by traversing through the children of the current parent menu node.
 	const char *cursor = " <";
 	size_t cursor_size = strlen(cursor);
-	size_t option_size = MAX_MENU_NODE_DATA_CHARS + cursor_size;
+	size_t option_size = MENU_NODE_DATA_BUFFER_SIZE + cursor_size;
 	char option[option_size];
 	memset(option, 0, option_size);
 
@@ -908,20 +1124,29 @@ void draw_menu_view() {
 	}
 }
 
-//*********************************************************************************************************************
+void draw_si_view() {
+    // Always clear the screen before drawing system info.
+    clear_screen();
 
-void http_get_time(void *arg) {
-    while (true) {
-        if (xSemaphoreTake(mutex, 0) == pdTRUE) {
-            refresh_display = update_time() && curr_state == STATE_CC;
-            xSemaphoreGive(mutex);
-            // Wait for 60 seconds before the next request
-            vTaskDelay(pdMS_TO_TICKS(TIME_REFRESH_TIME_MS)); 
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }   
-    }
+    // Draw header container
+    draw_header_rect();
+
+    // Draw header text
+    draw_header_string(MENU_OPTION_SYSTEM_INFO);
+
+    // Draw system info
+    char heap_size[HEAP_SIZE_BUFFER_SIZE];
+    uint32_t rem_heap_size = esp_get_free_heap_size();
+    memset(heap_size, 0, HEAP_SIZE_BUFFER_SIZE);
+    snprintf(heap_size, HEAP_SIZE_BUFFER_SIZE, "Mem Free: %lu B", rem_heap_size);
+    draw_string(heap_size, 10, 20, DGX_WHITE(dgx_rgb_to_16), 2);
 }
+
+void draw_curr_alert() {
+    draw_alert(alert_list.curr_node);
+}
+
+//*********************************************************************************************************************
 
 void http_get_curr_conditions(void *arg) {
     while (true) {
@@ -952,6 +1177,29 @@ void http_get_forecast(void *arg) {
     }
 }
 
+void http_get_alerts(void *arg) {
+    while (true) {
+        if (xSemaphoreTake(mutex, 0) == pdTRUE) {
+            if (update_alerts()) {
+                refresh_display = true;
+            }
+            xSemaphoreGive(mutex);
+            // Wait for 5 minutes before the next request
+            vTaskDelay(pdMS_TO_TICKS(CURR_CONDITIONS_REFRESH_TIME_MS)); 
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+}
+
+void get_time(void *arg) {
+    while (true) {
+        refresh_display = update_time() && curr_state == STATE_CC;
+        // Wait for 60 seconds before the next request
+        vTaskDelay(pdMS_TO_TICKS(TIME_REFRESH_TIME_MS)); 
+    }
+}
+
 void check_error_bits(void *arg) { 
     while (true) {
         if (error_bits != prev_error_bits) {
@@ -960,6 +1208,35 @@ void check_error_bits(void *arg) {
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }   
+}
+
+void check_and_update_display(void *arg) {
+    while (true) {
+        if (refresh_display) {
+            if (curr_state == STATE_CC) {
+                draw_cc_view();
+            } else if (curr_state == STATE_MENU) {
+                draw_menu_view();
+            } else if (curr_state == STATE_SI) {
+                draw_si_view();
+            }
+            if (alert_list.root_node != NULL) {
+                draw_curr_alert();  // We always want to show alerts on top of whatever screen we're on.
+            }
+            refresh_display = false;
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void check_for_alerts(void *arg) {
+    while (true) {
+        if (set_curr_alert()) {
+            refresh_display = true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(ALERT_CYCLE_MS));    // Change alerts every 5 minutes.
+    }
 }
 
 void menu_btn_event(void *arg, void *usr_data) {
@@ -983,21 +1260,6 @@ void menu_down_btn_event(void *arg, void *usr_data) {
     ESP_LOGI(TAG_INFO, "Menu down button pressed.");
     if (curr_state == STATE_MENU) {
         update_menu(false, false, true);
-    }
-}
-
-void check_and_update_display(void *arg) {
-    while (true) {
-        if (refresh_display) {
-            if (curr_state == STATE_CC) {
-                draw_cc_view();
-            } else if (curr_state == STATE_MENU) {
-                draw_menu_view();
-            }
-            refresh_display = false;
-        }
-        
-        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -1134,71 +1396,24 @@ void init_display() {
 }
 
 void init_menu() {
-    	// Top of menu
-	root_menu_node = create_menu_node("Menu");
+    // Parse the JSON string and create the menu nodes from it.
+    cJSON *json = cJSON_Parse(MENU_JSON_STR);
+    json = json->child;
+    ESP_LOGI(TAG_INFO, "Successfully parsed menu JSON.");
 
-	struct MenuNode *back_node = create_menu_node(MENU_OPTION_BACK);
-	root_menu_node->first_child = back_node;
-	
-	struct MenuNode *settings_node = create_menu_node("Settings");
-	settings_node->prev_sibling = back_node;
-	back_node->next_sibling = settings_node;
-	
-	struct MenuNode *tests_node = create_menu_node("Tests");
-	tests_node->prev_sibling = settings_node;
-	settings_node->next_sibling = tests_node;
-
-	// Settings
-	struct MenuNode *settings_back_node = create_menu_node(MENU_OPTION_BACK);
-	settings_node->first_child = settings_back_node;
-
-	// Tests
-	struct MenuNode *tests_back_node = create_menu_node(MENU_OPTION_BACK);
-	tests_node->first_child = tests_back_node; 
-	
-	struct MenuNode *tests_eas_node = create_menu_node("EAS");
-	tests_eas_node->prev_sibling = tests_back_node;
-	tests_back_node->next_sibling = tests_eas_node;
-
-	struct MenuNode *tests_cc_node = create_menu_node("Current Conditions");
-	tests_cc_node->prev_sibling = tests_eas_node;
-	tests_eas_node->next_sibling = tests_cc_node;
-
-    struct MenuNode *system_info_node = create_menu_node(MENU_OPTION_SYSTEM_INFO);
-    system_info_node->prev_sibling = settings_node;
-
-    struct MenuNode *clear_error_code_node = create_menu_node(MENU_OPTION_CLEAR_ERROR_CODE);
-    clear_error_code_node->prev_sibling = system_info_node;
-    system_info_node->next_sibling = clear_error_code_node;
-
-    // CC testing nodes.
-    struct MenuNode *tests_cc_back_node = create_menu_node(MENU_OPTION_BACK);
-    tests_cc_node->first_child = tests_cc_back_node;
-
-    struct MenuNode *cc_clear_node = create_menu_node(MENU_OPTION_CLEAR);
-    tests_cc_back_node->next_sibling = cc_clear_node;
-    cc_clear_node->prev_sibling = tests_cc_back_node;
-
-    struct MenuNode *cc_cloudy_node = create_menu_node(MENU_OPTION_CLOUDY);
-    cc_clear_node->next_sibling = cc_cloudy_node;
-    cc_cloudy_node->prev_sibling = cc_clear_node;
-
-    struct MenuNode *cc_partly_cloudy_node = create_menu_node(MENU_OPTION_PARTLY_CLOUDY);
-    cc_cloudy_node->next_sibling = cc_partly_cloudy_node;
-    cc_partly_cloudy_node->prev_sibling = cc_cloudy_node;
-
-    struct MenuNode *cc_showers_node = create_menu_node(MENU_OPTION_SCATTERED_SHOWERS);
-    cc_partly_cloudy_node->next_sibling = cc_showers_node;
-    cc_showers_node->prev_sibling = cc_partly_cloudy_node;
-
-    struct MenuNode *cc_thunderstorm_node = create_menu_node(MENU_OPTION_THUNDERSTORM);
-    cc_showers_node->next_sibling = cc_thunderstorm_node;
-    cc_thunderstorm_node->prev_sibling = cc_showers_node;
+    root_menu_node = create_menu_nodes(json, NULL, false);
+    ESP_LOGI(TAG_INFO, "Successfully created menu nodes.");
 
 	curr_parent_node = root_menu_node;
-	curr_section_lead_node = back_node;
-	curr_menu_node = back_node;
+	curr_section_lead_node = curr_parent_node->first_child;
+	curr_menu_node = curr_section_lead_node;
 	curr_menu_pos = 0;
+}
+
+void init_http_client_config() {
+    // Initialize the HTTP client config.
+    config.event_handler = http_event_handler;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
 }
 
 void init_buzzers() {
@@ -1237,14 +1452,25 @@ void init_buzzers() {
     ledc_channel_config(&buzzer_2_channel);
 }
 
+void init_clock() {
+    esp_sntp_config_t config =
+    ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+
+    ESP_ERROR_CHECK(esp_netif_sntp_init(&config));
+    if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) != ESP_OK) {
+        ESP_LOGE(TAG_ERROR, "SNTP sync timed out\n");
+        return;
+    }
+
+    setenv("TZ", TIME_ZONE, 1);
+    tzset();
+}
+
 //*********************************************************************************************************************
 
 void app_main(void) {
     // Initialize GPIO pins
     init_pins();
-
-    // Create and initialize the display bus
-    init_display();
 
     // Initialize the menu nodes
     init_menu();
@@ -1252,28 +1478,45 @@ void app_main(void) {
     // Initialize buzzers
     init_buzzers();
 
+    // Create and initialize the display bus
+    init_display();
+
+    // Draw the footer string.
+    draw_string(FOOTER_WS32, 230, 220, DGX_YELLOW(dgx_rgb_to_16), 1);
+    draw_string(FOOTER_BY, 230, 230, DGX_WHITE(dgx_rgb_to_16), 1);
+
+    // Init alert struct
+    alert_list.root_node = NULL;
+    alert_list.curr_node = NULL;
+
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-     */
+    // Initialize network connection
     draw_string("Establishing network connection ...", 0, 20, DGX_WHITE(dgx_rgb_to_16), 2);
     ESP_ERROR_CHECK(example_connect());
 
+    // Set timezone
+    draw_string("Initializing system clock ...", 0, 50, DGX_WHITE(dgx_rgb_to_16), 2);
+    init_clock();
+
+    // Initialize HTTP client
+    init_http_client_config();
+
     // Set up our tasks for our HTTP get requests.
-    draw_string("Starting tasks ...", 0, 50, DGX_WHITE(dgx_rgb_to_16), 2);
+    draw_string("Starting tasks ...", 0, 80, DGX_WHITE(dgx_rgb_to_16), 2);
 
     // Create mutex for HTTP response buffer.
     mutex = xSemaphoreCreateMutex();
 
     xTaskCreate(check_and_update_display, "check_and_update_display", 4028, NULL, 3, NULL);
     xTaskCreate(check_error_bits, "check_error_bits", 2048, NULL, 4, NULL);
-    xTaskCreate(http_get_time, "http_get_time", 4028, NULL, 5, NULL);
-    xTaskCreate(http_get_curr_conditions, "http_get_curr_conditions", 8192, NULL, 6, NULL);
-    xTaskCreate(http_get_forecast, "http_get_forecast", 8192, NULL, 7, NULL);
-    xTaskCreate(play_eas_tone_buzzer_1, "play_eas_tone_buzzer_1", 1024, NULL, 8, NULL);
-    xTaskCreate(play_eas_tone_buzzer_2, "play_eas_tone_buzzer_2", 1024, NULL, 9, NULL);
+    xTaskCreate(get_time, "get_time", 4028, NULL, 5, NULL);
+    xTaskCreate(check_for_alerts, "check_for_alerts", 1024, NULL, 6, NULL);
+    xTaskCreate(http_get_alerts, "http_get_alerts", 8192, NULL, 7, NULL);
+    xTaskCreate(http_get_curr_conditions, "http_get_curr_conditions", 8192, NULL, 8, NULL);
+    xTaskCreate(http_get_forecast, "http_get_forecast", 8192, NULL, 9, NULL);
+    xTaskCreate(play_eas_tone_buzzer_1, "play_eas_tone_buzzer_1", 1024, NULL, 10, NULL);
+    xTaskCreate(play_eas_tone_buzzer_2, "play_eas_tone_buzzer_2", 1024, NULL, 11, NULL);
 }

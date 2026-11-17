@@ -1,0 +1,35 @@
+{
+    "Menu": 
+    {
+        "Back": 0,
+        "Settings":
+        {
+            "Back": 0
+        },
+        "Tests":
+        {
+            "Back": 0,
+            "EAS":
+            [
+                "Back",
+                "Blizzard Watch",
+                "Blizzard Warning",
+                "Severe T'storm Watch",
+                "Severe T'storm Warning",
+                "Tornado Watch",
+                "Tornado Warning"
+            ],
+            "Current Conditions": 
+            [
+                "Back",
+                "Clear",
+                "Cloudy",
+                "Partly Cloudy",
+                "Scattered Showers",
+                "Thunderstorm"
+            ]
+        },
+        "View System Info": 0,
+        "Clear Error Code": 0
+    }
+}
