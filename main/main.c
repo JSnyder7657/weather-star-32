@@ -1,8 +1,3 @@
-/**
- * TODO
- * [ ] Figure out seg fault issue when adding test alerts
- */
-
 #include <string.h>
 #include <shiftregister_gpio.h>
 #include <semaphore.h>
