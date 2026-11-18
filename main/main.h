@@ -166,8 +166,8 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 const bool DEG_F = true;
 
 // Button constants;
-#define BTN_SHORT_PRESS_TIME_MS  200
-#define BTN_LONG_PRESS_TIME_MS  5000
+#define BTN_SHORT_PRESS_TIME_MS  UINT8_C(200)
+#define BTN_LONG_PRESS_TIME_MS  UINT16_C(5000)
 button_config_t menu_btn_config, menu_up_btn_config, menu_down_btn_config;
 button_gpio_config_t menu_btn_gpio_config, menu_down_btn_gpio_config, menu_up_btn_gpio_config;
 
