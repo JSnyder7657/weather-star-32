@@ -105,30 +105,6 @@ bool string_contains(const char *str_1, const char *str_2) {
 
 //*********************************************************************************************************************
 
-bool add_test_alert(const char *event, const char *severity) {
-    // Get the current local timestamp.
-    time_t timestamp;
-    time(&timestamp);
-    struct tm utc_date_time_tm = {0};
-    if (gmtime_r(&timestamp, &utc_date_time_tm) == NULL) {
-        error_bits = ERROR_TIME_API_GET;
-        ESP_LOGE(TAG_ERROR, "Error setting UTC time.");
-        return false;
-    }
-    time_t time_utc = mktime(&utc_date_time_tm);
-    time_utc += 1200;
-    if (gmtime_r(&time_utc, &utc_date_time_tm) == NULL) {
-        error_bits = ERROR_TIME_API_GET;
-        ESP_LOGE(TAG_ERROR, "Error setting UTC time.");
-        return false;
-    }
-
-    char date_time[DATE_TIME_STRING_BUFFER_SIZE];
-    strftime(date_time, DATE_TIME_STRING_BUFFER_SIZE, DATE_TIME_STRING_FORMAT, &utc_date_time_tm);
-
-    return add_alert(event, date_time, severity);
-}
-
 struct MenuNode* find_grandparent_node(struct MenuNode *node, struct MenuNode *grandparent_node) {
     if (node == NULL) return NULL;
 	if (node == curr_parent_node) return grandparent_node;
@@ -194,6 +170,9 @@ void perform_menu_action() {
         exit_menu();
     } else if (compare_strings(MENU_OPTION_TORNADO_WARNING, curr_menu_node->data, -1)) {
         add_test_alert(MENU_OPTION_TORNADO_WARNING, JSON_EXTREME);
+        exit_menu();
+    } else if (compare_strings(MENU_OPTION_TORNADO_WATCH, curr_menu_node->data, -1)) {
+        add_test_alert(MENU_OPTION_TORNADO_WATCH, JSON_MODERATE);
         exit_menu();
     }
 }
@@ -348,8 +327,6 @@ uint16_t *get_image_data_from_fs(const char *file_name) {
     fread(bitmap_buffer, 1024, sizeof(uint16_t), f);
     fclose(f);
 
-    ESP_LOGI(TAG_INFO, "Successfully loaded \"%s\".", file_name);
-
     return bitmap_buffer;
 }
 
@@ -371,6 +348,32 @@ bool get_bit_val_at_pos(uint8_t num, uint8_t bit_pos) {
 
 //*********************************************************************************************************************
 
+bool add_test_alert(const char *event, const char *severity) {
+    // Get the current local timestamp.
+    time_t timestamp;
+    time(&timestamp);
+    struct tm utc_date_time_tm = {0};
+    if (gmtime_r(&timestamp, &utc_date_time_tm) == NULL) {
+        error_bits = ERROR_TIME_API_GET;
+        ESP_LOGE(TAG_ERROR, "Error setting UTC time.");
+        return false;
+    }
+    time_t time_utc = mktime(&utc_date_time_tm);
+    time_utc += 1;
+    if (gmtime_r(&time_utc, &utc_date_time_tm) == NULL) {
+        error_bits = ERROR_TIME_API_GET;
+        ESP_LOGE(TAG_ERROR, "Error setting UTC time.");
+        return false;
+    }
+    char date_time[DATE_TIME_STRING_BUFFER_SIZE];
+    strftime(date_time, DATE_TIME_STRING_BUFFER_SIZE, DATE_TIME_STRING_FORMAT, &utc_date_time_tm);
+
+    // Add the alert and reset the alert cycle timer so that we can see the new alert in full time.
+    bool success = add_alert(event, date_time, severity);
+    xTimerReset(alert_cycle_timer, 0);
+    return success;
+}
+
 bool add_alert(const char *event, const char *alert_exp_date_time, const char *severity) {
     struct tm tm;
     strptime(alert_exp_date_time, DATE_TIME_STRING_FORMAT, &tm);
@@ -382,18 +385,23 @@ bool add_alert(const char *event, const char *alert_exp_date_time, const char *s
     
     if (alert_list.root_node == NULL) {
         alert_list.root_node = new_node;
-        alert_list.curr_node = new_node;
     } else {
-        struct AlertNode *temp_node = alert_list.root_node;
-        while (temp_node->next_node != NULL) {
-            temp_node = temp_node->next_node;
-        }
-        temp_node->next_node = new_node;
+        new_node->next_node = alert_list.root_node;
+        alert_list.root_node = new_node;
     }
+    alert_list.curr_node = alert_list.root_node;
 
     ESP_LOGI(TAG_INFO, "Added alert %s", new_node->data);
 
     return true;
+}
+
+void print_alerts() {
+    struct AlertNode *temp_node = alert_list.root_node;
+    while (temp_node != NULL) {
+        ESP_LOGI(TAG_INFO, "%s", temp_node->data);
+        temp_node = temp_node->next_node;
+    }
 }
 
 bool remove_expired_alerts() {
@@ -404,18 +412,24 @@ bool remove_expired_alerts() {
     struct AlertNode *temp_node = alert_list.root_node;
     struct AlertNode *placeholder_node, *prev_node = NULL;
     while (temp_node != NULL) {
-        if (curr_time_utc <= alert_list.root_node->expire_time) {
+        if (curr_time_utc <= temp_node->expire_time) {
             prev_node = temp_node;
             temp_node = temp_node->next_node;
             continue;
         }
         placeholder_node = temp_node->next_node;
-        if (prev_node == NULL) {
+        if (alert_list.root_node == temp_node) {
+            free(temp_node);
+            temp_node = NULL;
+            if (alert_list.curr_node == alert_list.root_node) {
+                alert_list.curr_node = placeholder_node;
+            }
             alert_list.root_node = placeholder_node;
         } else {
             prev_node->next_node = placeholder_node;
+            free(temp_node);
+            temp_node = NULL;
         }
-        free(temp_node);
         temp_node = placeholder_node;
     }
 
@@ -492,7 +506,7 @@ bool update_alerts() {
     snprintf(request_url, REQUEST_URL_BUFFER_SIZE, "%s%s%s%s%s%s%s", API_HOST, NWS_API_ALERTS_URL_PART, PARAM_START, 
         NWS_API_URL_POINT_PARAM, LATITUDE, LAT_LONG_DELIM, LONGITUDE);
 
-    // Configure HTTP client
+    // Configure HTTP client50000
     config.url = request_url;
 
     // Initialize HTTP client and perform the HTTP GET request
@@ -1141,7 +1155,6 @@ void draw_si_view() {
 }
 
 void draw_curr_alert() {
-    ESP_LOGI(TAG_INFO, "Drawing current alert %s", alert_list.curr_node->data);
     draw_alert(alert_list.curr_node);
 }
 
@@ -1180,11 +1193,13 @@ void http_get_alerts(void *arg) {
     while (true) {
         if (xSemaphoreTake(mutex, 0) == pdTRUE) {
             if (update_alerts()) {
+                // Reset the alert cycle timer so that we can see the new alert(s).
+                xTimerReset(alert_cycle_timer, 0);
                 refresh_display = true;
             }
             xSemaphoreGive(mutex);
             // Wait for 5 minutes before the next request
-            vTaskDelay(pdMS_TO_TICKS(CURR_CONDITIONS_REFRESH_TIME_MS)); 
+            vTaskDelay(pdMS_TO_TICKS(ALERTS_TIME_REFRESH_MS)); 
         } else {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
@@ -1226,26 +1241,6 @@ void check_and_update_display(void *arg) {
         }
         
         vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-void cycle_alerts(void *arg) {
-    while (true) {
-        ESP_LOGI(TAG_INFO, "Setting current alert ...");
-        if (alert_list.root_node != NULL) {
-            if (alert_list.curr_node == NULL) {
-                alert_list.curr_node = alert_list.root_node;
-                ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.root_node.");
-            } else {
-                alert_list.curr_node = alert_list.curr_node->next_node;
-                if (alert_list.curr_node == NULL) {
-                    alert_list.curr_node = alert_list.root_node;
-                }
-                ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.curr_node->next_node.");
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(ALERT_CYCLE_MS));    // Change alerts every 2 minutes.
     }
 }
 
@@ -1296,6 +1291,18 @@ void play_eas_tone_buzzer_2(void *arg) {
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+}
+
+void alert_cycle_timer_callback(TimerHandle_t xTimer) {
+    if (alert_list.root_node == NULL) {
+        return;
+    }
+    alert_list.curr_node = alert_list.curr_node->next_node;
+    if (alert_list.curr_node == NULL) {
+        alert_list.curr_node = alert_list.root_node;
+    }
+    
+    refresh_display = true;
 }
 
 //*********************************************************************************************************************
@@ -1532,10 +1539,15 @@ void app_main(void) {
     // Create mutex for HTTP response buffer.
     mutex = xSemaphoreCreateMutex();
 
+    // Create timer for cycling through alerts.
+    alert_cycle_timer = xTimerCreate("alert-cycle-timer", pdMS_TO_TICKS(ALERT_CYCLE_MS), pdTRUE, (void*) 0, 
+        alert_cycle_timer_callback);
+    xTimerStart(alert_cycle_timer, 0);
+
+    // Create tasks.
     xTaskCreate(check_and_update_display, "check_and_update_display", 4028, NULL, 3, NULL);
     xTaskCreate(check_error_bits, "check_error_bits", 2048, NULL, 4, NULL);
     xTaskCreate(get_time, "get_time", 4028, NULL, 5, NULL);
-    xTaskCreate(cycle_alerts, "cycle_alerts", 1024, NULL, 6, NULL);
     xTaskCreate(http_get_alerts, "http_get_alerts", 8192, NULL, 7, NULL);
     xTaskCreate(http_get_curr_conditions, "http_get_curr_conditions", 8192, NULL, 8, NULL);
     xTaskCreate(http_get_forecast, "http_get_forecast", 8192, NULL, 9, NULL);

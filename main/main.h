@@ -139,27 +139,28 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define HEAP_SIZE_BUFFER_SIZE UINT8_C(32)
 
 // Buzzer constants
-const uint16_t EAS_TONE_FREQ_1 = 850;
-const uint16_t EAS_TONE_FREQ_2 = 860;
-const uint16_t BUZZER_POWER_ON_FREQ = 1000;
-const uint8_t BUZZER_POWER_ON_DURATION_MS = 250;
-const uint16_t EAS_TONE_DURATION_MS = 3000;
+#define EAS_TONE_FREQ_1 UINT16_C(850)
+#define EAS_TONE_FREQ_2 UINT16_C(860)
+#define BUZZER_POWER_ON_FREQ  UINT16_C(1000)
+#define BUZZER_POWER_ON_DURATION_MS UINT16_C(250)
+#define EAS_TONE_DURATION_MS  UINT16_C(3000)
 
 // UI constants
 #define CC_CONTAINER_COLOR  dgx_rgb_to_16(41, 54, 103)
-const uint8_t TEXT_SIZE = 2;
-const uint8_t SHADOW_OFFSET = 2;
+#define TEXT_SIZE   UINT8_C(2)
+#define SHADOW_OFFSET UINT8_C(2)
 
 // Weather data constants
 #define DESC_BUFFER_SIZE  UINT8_C(255)
 #define WIND_DIR_BUFFER_SIZE UINT8_C(3)
-#define ALERT_CYCLE_MS  UINT16_C(50000)
+#define ALERT_CYCLE_MS  UINT16_C(10000) // 10 seconds
 #define GENERIC_ALERT_EVENT "Check local news"
 
 // Refresh time constants
-const uint64_t FORECAST_REFRESH_TIME_MS = 28800000;
-const uint64_t CURR_CONDITIONS_REFRESH_TIME_MS = 300000;
-const uint16_t TIME_REFRESH_TIME_MS = 60000;
+#define FORECAST_REFRESH_TIME_MS  UINT64_C(28800000)  // 8 hours
+#define CURR_CONDITIONS_REFRESH_TIME_MS UINT64_C(300000) // 5 minutes
+#define ALERTS_TIME_REFRESH_MS  UINT32_C(120000)  // 2 minutes
+#define TIME_REFRESH_TIME_MS  UINT16_C(60000) // 1 minute
 
 // Current conditions constants
 const bool DEG_F = true;
@@ -256,6 +257,9 @@ shiftregister_config_t reg_config = {
 // Mutex
 SemaphoreHandle_t mutex;
 
+// Timers
+TimerHandle_t alert_cycle_timer;
+
 // File system
 esp_vfs_littlefs_conf_t conf;
 
@@ -273,8 +277,6 @@ bool compare_strings(const char *str_1, const char *str_2, int usr_comp_size);
 bool string_contains(const char *str_1, const char *str_2);
 
 //*********************************************************************************************************************
-
-bool add_test_alert(const char *event, const char *severity);
 
 struct MenuNode* find_grandparent_node(struct MenuNode *node, struct MenuNode *grandparent_node);
 void perform_menu_action();
@@ -310,6 +312,7 @@ bool get_bit_val_at_pos(uint8_t num, uint8_t bit_pos);
 
 //*********************************************************************************************************************
 
+bool add_test_alert(const char *event, const char *severity);
 bool add_alert(const char *event, const char *alert_exp_date_time, const char *severity);
 bool remove_expired_alerts();
 
