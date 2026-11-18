@@ -204,6 +204,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 0.10.13
+  joltwallet/littlefs:
+    component_hash: e1a0f4a6adf821759cb34703a91107bbdce5d7ff6f4728f40ab012bb87842974
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.23.1
   protocol_examples_common:
     dependencies:
     - name: espressif/ethernet_init
@@ -219,7 +229,8 @@ direct_dependencies:
 - espressif/button
 - espressif/cjson
 - jef-sure/dgx
+- joltwallet/littlefs
 - protocol_examples_common
-manifest_hash: e46d08d1f4e1600c72d304ed2153c0cfd28d1fb66bdc3e1acd6f896ea48711ba
+manifest_hash: dad220a2e9beb0bef06df662d9f4d27aacdb857416f14d7e2965d7ad607a6688
 target: esp32
 version: 3.0.0

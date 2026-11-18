@@ -5,3 +5,4 @@ dependencies:
   esp-idf-lib/shiftregister: ^1.0.1
   espressif/button: ^4.2.3
   espressif/cjson: ^1.7.19~2
+  joltwallet/littlefs: ^1.23.1

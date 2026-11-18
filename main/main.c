@@ -2,6 +2,7 @@
 #include <shiftregister_gpio.h>
 #include <semaphore.h>
 #include <cJSON.h>
+#include <esp_littlefs.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
@@ -25,6 +26,8 @@
 #include "iot_button.h"
 #include "button_gpio.h"
 #include "esp_netif_sntp.h"
+#include "esp_chip_info.h"
+#include "esp_flash.h"
 
 //*********************************************************************************************************************
 
@@ -259,6 +262,10 @@ void draw_header_string(const char *str) {
 }
 
 void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale) {
+    if (bitmap == NULL) {
+        return;
+    }
+
     uint8_t image_be[size * size * 2];
 
     for (int i = 0; i < size * size; ++i) {
@@ -287,46 +294,63 @@ void draw_alert(struct AlertNode *alert) {
     draw_string(alert->data, 0, 20, DGX_WHITE(dgx_rgb_to_16), 2);
 }
 
-void draw_cloud(int x, int y, uint32_t color) {
-    dgx_solid_circle(tft, (x + SHADOW_OFFSET), (y + SHADOW_OFFSET), 15, DGX_BLACK(dgx_rgb_to_16));
-    dgx_solid_circle(tft, (x + 10 + SHADOW_OFFSET), ((y - 10) + SHADOW_OFFSET), 15, DGX_BLACK(dgx_rgb_to_16));
-    dgx_solid_circle(tft, (x + 20 + SHADOW_OFFSET), (y + 5 + SHADOW_OFFSET), 15, DGX_BLACK(dgx_rgb_to_16));
-    
-    dgx_solid_circle(tft, x, y, 15, color);
-    dgx_solid_circle(tft, (x + 10), (y - 10), 15, color);
-    dgx_solid_circle(tft, (x + 20), (y + 5), 15, color);
-}
-
-void draw_sun(int x, int y, int scale) {
-    dgx_solid_circle(tft, x + SHADOW_OFFSET, y + SHADOW_OFFSET, 1 * scale, DGX_BLACK(dgx_rgb_to_16));
-    dgx_solid_circle(tft, x, y, scale, DGX_YELLOW(dgx_rgb_to_16));
-}
-
 void draw_condition_clear() {
-    draw_bitmap(sun_bitmap, 32, 70, 85, 3);
+    uint16_t *bitmap = get_image_data_from_fs(FILE_SUN_BIN);
+    draw_bitmap(bitmap, 32, 70, 85, 3);
+    free(bitmap);
 }
 
 void draw_condition_cloudy() {
-    draw_bitmap(cloud_bitmap, 32, 50, 110, 2);
-    draw_bitmap(cloud_bitmap, 32, 80, 90, 2);
-    draw_bitmap(cloud_bitmap, 32, 110, 105, 2);
+    uint16_t *bitmap = get_image_data_from_fs(FILE_CLOUD_BIN);
+    draw_bitmap(bitmap, 32, 50, 110, 2);
+    draw_bitmap(bitmap, 32, 80, 90, 2);
+    draw_bitmap(bitmap, 32, 110, 105, 2);
+    free(bitmap);
 }
 
 void draw_condition_partly_cloudy() {
+    uint16_t *sun_bitmap = get_image_data_from_fs(FILE_SUN_BIN);
+    uint16_t *cloud_bitmap = get_image_data_from_fs(FILE_CLOUD_BIN);
     draw_bitmap(sun_bitmap, 32, 70, 85, 3);
     draw_bitmap(cloud_bitmap, 32, 75, 85, 3);
+    free(sun_bitmap);
+    free(cloud_bitmap);
 }
 
 void draw_condition_rain() {
+    uint16_t *rain_bitmap = get_image_data_from_fs(FILE_RAIN_BIN);
     draw_bitmap(rain_bitmap, 32, 70, 85, 3);
+    free(rain_bitmap);
 }
 
 void draw_condition_storm() {
+    uint16_t *storm_bitmap = get_image_data_from_fs(FILE_STORM_BIN);
     draw_bitmap(storm_bitmap, 32, 70, 85, 3);
+    free(storm_bitmap);
 }
 
 void draw_condition_unknown() {
+    uint16_t *unknown_bitmap = get_image_data_from_fs(FILE_UNKNOWN_BIN);
     draw_bitmap(unknown_bitmap, 32, 70, 85, 3);
+    free(unknown_bitmap);
+}
+
+uint16_t *get_image_data_from_fs(const char *file_name) {
+    char file_path_buffer[FILE_PATH_BUFFER_SIZE];
+    snprintf(file_path_buffer, FILE_PATH_BUFFER_SIZE, "%s/%s", BASE_PATH, file_name);
+    FILE *f = fopen(file_path_buffer, "rb");
+    if (f == NULL) {
+        error_bits = ERROR_FS_LOAD;
+        ESP_LOGE(TAG_ERROR, "Error reading \"%s\".", file_name);
+        return NULL;
+    }
+    uint16_t *bitmap_buffer = (uint16_t*) malloc(1024 * sizeof(uint16_t));
+    fread(bitmap_buffer, 1024, sizeof(uint16_t), f);
+    fclose(f);
+
+    ESP_LOGI(TAG_INFO, "Successfully loaded \"%s\".", file_name);
+
+    return bitmap_buffer;
 }
 
 void clear_screen() {
@@ -353,11 +377,12 @@ bool add_alert(const char *event, const char *alert_exp_date_time, const char *s
 
     struct AlertNode *new_node = (struct AlertNode*) calloc(1, sizeof(struct AlertNode));
     snprintf(new_node->data, MENU_NODE_DATA_BUFFER_SIZE, "%s", event);
-    snprintf(new_node->data, SEVERITY_BUFFER_SIZE, "%s", severity);
+    snprintf(new_node->severity, SEVERITY_BUFFER_SIZE, "%s", severity);
     new_node->expire_time = timegm(&tm);
     
     if (alert_list.root_node == NULL) {
         alert_list.root_node = new_node;
+        alert_list.curr_node = new_node;
     } else {
         struct AlertNode *temp_node = alert_list.root_node;
         while (temp_node->next_node != NULL) {
@@ -366,7 +391,7 @@ bool add_alert(const char *event, const char *alert_exp_date_time, const char *s
         temp_node->next_node = new_node;
     }
 
-    ESP_LOGI(TAG_INFO, "Added alert.");
+    ESP_LOGI(TAG_INFO, "Added alert %s", new_node->data);
 
     return true;
 }
@@ -392,24 +417,6 @@ bool remove_expired_alerts() {
         }
         free(temp_node);
         temp_node = placeholder_node;
-    }
-
-    return true;
-}
-
-bool set_curr_alert() {
-    ESP_LOGI(TAG_INFO, "Setting current alert ...");
-    if (alert_list.root_node == NULL) {
-        return false;
-    } else if (alert_list.curr_node == NULL) {
-        alert_list.curr_node = alert_list.root_node;
-        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.root_node.");
-    } else {
-        alert_list.curr_node = alert_list.curr_node->next_node;
-        if (alert_list.curr_node == NULL) {
-            alert_list.curr_node = alert_list.root_node;
-        }
-        ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.curr_node->next_node.");
     }
 
     return true;
@@ -841,7 +848,7 @@ bool update_forecast() {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse forecast JSON");
         return false;
-    }option_size
+    }
     cJSON *cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
     if (cjson_properties == NULL) {
         error_bits = ERROR_SP_JSON;
@@ -1055,7 +1062,9 @@ void draw_cc_view() {
     memset(dew_point_buff, 0, 8);
     snprintf(dew_point_buff, 8, "%.1f %c", dew_point, temperature_char);
     draw_string(dew_point_buff, 240, 185, DGX_WHITE(dgx_rgb_to_16), 2);
+    uint16_t *dew_point_bitmap = get_image_data_from_fs(FILE_DEWPOINT_BIN);
     draw_bitmap(dew_point_bitmap, 16, 225, 172, 1);
+    free(dew_point_bitmap);
 
     // Write the current description.
     draw_string(cc_desc, 30, 210, DGX_WHITE(dgx_rgb_to_16), 3);
@@ -1132,6 +1141,7 @@ void draw_si_view() {
 }
 
 void draw_curr_alert() {
+    ESP_LOGI(TAG_INFO, "Drawing current alert %s", alert_list.curr_node->data);
     draw_alert(alert_list.curr_node);
 }
 
@@ -1209,7 +1219,7 @@ void check_and_update_display(void *arg) {
             } else if (curr_state == STATE_SI) {
                 draw_si_view();
             }
-            if (alert_list.root_node != NULL) {
+            if (alert_list.curr_node != NULL) {
                 draw_curr_alert();  // We always want to show alerts on top of whatever screen we're on.
             }
             refresh_display = false;
@@ -1219,17 +1229,27 @@ void check_and_update_display(void *arg) {
     }
 }
 
-void check_for_alerts(void *arg) {
+void cycle_alerts(void *arg) {
     while (true) {
-        if (set_curr_alert()) {
-            refresh_display = true;
+        ESP_LOGI(TAG_INFO, "Setting current alert ...");
+        if (alert_list.root_node != NULL) {
+            if (alert_list.curr_node == NULL) {
+                alert_list.curr_node = alert_list.root_node;
+                ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.root_node.");
+            } else {
+                alert_list.curr_node = alert_list.curr_node->next_node;
+                if (alert_list.curr_node == NULL) {
+                    alert_list.curr_node = alert_list.root_node;
+                }
+                ESP_LOGI(TAG_INFO, "Set alert_list.curr_node to alert_list.curr_node->next_node.");
+            }
         }
-        vTaskDelay(pdMS_TO_TICKS(ALERT_CYCLE_MS));    // Change alerts every 5 minutes.
+
+        vTaskDelay(pdMS_TO_TICKS(ALERT_CYCLE_MS));    // Change alerts every 2 minutes.
     }
 }
 
 void menu_btn_event(void *arg, void *usr_data) {
-    ESP_LOGI(TAG_INFO, "Menu button pressed.");
     if (curr_state == STATE_MENU) {
         update_menu(true, false, false);
     } else if (curr_state == STATE_CC) {
@@ -1239,14 +1259,12 @@ void menu_btn_event(void *arg, void *usr_data) {
 }
 
 void menu_up_btn_event(void *arg, void *usr_data) {
-    ESP_LOGI(TAG_INFO, "Menu up button pressed.");
     if (curr_state == STATE_MENU) {
         update_menu(false, true, false);
     }
 }
 
 void menu_down_btn_event(void *arg, void *usr_data) {
-    ESP_LOGI(TAG_INFO, "Menu down button pressed.");
     if (curr_state == STATE_MENU) {
         update_menu(false, false, true);
     }
@@ -1455,14 +1473,23 @@ void init_clock() {
     tzset();
 }
 
+void init_fs() {
+    conf.base_path = BASE_PATH;
+    conf.partition_label = PARTITION_NAME;
+    conf.format_if_mount_failed = true;
+    conf.dont_mount = false;
+
+    esp_err_t ret = esp_vfs_littlefs_register(&conf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG_ERROR, "Error initializing file system: %s", esp_err_to_name(ret));
+    }
+}
+
 //*********************************************************************************************************************
 
 void app_main(void) {
     // Initialize GPIO pins
     init_pins();
-
-    // Initialize the menu nodes
-    init_menu();
 
     // Initialize buzzers
     init_buzzers();
@@ -1471,8 +1498,8 @@ void app_main(void) {
     init_display();
 
     // Draw the footer string.
-    draw_string(FOOTER_WS32, 230, 220, DGX_YELLOW(dgx_rgb_to_16), 1);
-    draw_string(FOOTER_BY, 230, 230, DGX_WHITE(dgx_rgb_to_16), 1);
+    draw_string(FOOTER_WS32, 240, 220, DGX_YELLOW(dgx_rgb_to_16), 1);
+    draw_string(FOOTER_BY, 240, 230, DGX_WHITE(dgx_rgb_to_16), 1);
 
     // Init alert struct
     alert_list.root_node = NULL;
@@ -1487,14 +1514,20 @@ void app_main(void) {
     ESP_ERROR_CHECK(example_connect());
 
     // Set timezone
-    draw_string("Initializing system clock ...", 0, 50, DGX_WHITE(dgx_rgb_to_16), 2);
+    draw_string("Syncing system clock ...", 0, 50, DGX_WHITE(dgx_rgb_to_16), 2);
     init_clock();
 
     // Initialize HTTP client
+    draw_string("Initializing HTTP client ...", 0, 80, DGX_WHITE(dgx_rgb_to_16), 2);
     init_http_client_config();
 
-    // Set up our tasks for our HTTP get requests.
-    draw_string("Starting tasks ...", 0, 80, DGX_WHITE(dgx_rgb_to_16), 2);
+    // Initialize the menu nodes
+    draw_string("Initializing menu ...", 0, 110, DGX_WHITE(dgx_rgb_to_16), 2);
+    init_menu();
+
+    // Initialize the file system
+    draw_string("Initializing file system ...", 0, 140, DGX_WHITE(dgx_rgb_to_16), 2);
+    init_fs();
 
     // Create mutex for HTTP response buffer.
     mutex = xSemaphoreCreateMutex();
@@ -1502,7 +1535,7 @@ void app_main(void) {
     xTaskCreate(check_and_update_display, "check_and_update_display", 4028, NULL, 3, NULL);
     xTaskCreate(check_error_bits, "check_error_bits", 2048, NULL, 4, NULL);
     xTaskCreate(get_time, "get_time", 4028, NULL, 5, NULL);
-    xTaskCreate(check_for_alerts, "check_for_alerts", 1024, NULL, 6, NULL);
+    xTaskCreate(cycle_alerts, "cycle_alerts", 1024, NULL, 6, NULL);
     xTaskCreate(http_get_alerts, "http_get_alerts", 8192, NULL, 7, NULL);
     xTaskCreate(http_get_curr_conditions, "http_get_curr_conditions", 8192, NULL, 8, NULL);
     xTaskCreate(http_get_forecast, "http_get_forecast", 8192, NULL, 9, NULL);
