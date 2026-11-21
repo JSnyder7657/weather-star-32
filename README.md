@@ -54,7 +54,7 @@
 The Weather Star 32 is a weather monitoring device that runs on an ESP32 SoC. All you need to enter is your latitude and longitude and you'll be able to monitor the weather as if you're back in the 90s. This project takes inspiration from the Weather Star 4000, a custom machine built by the Weather Channel to display local weather data on cable TVs nation-wide from 1990-2014. 
 
 The Weather Star 4000 was a RAM-based system in that all of its code and data was received via satellite and stored directly in RAM. The Weather Star 32 is similar, but stores its code locally on the MCU itself. The Weather Star 32 receives data via
-HTTP from the National Weather Service's public API, which is linked in <p>(<a href="#acknowledgements">Acknowledgements</a>)</p>
+HTTP from the National Weather Service's public API, which is linked in <a href="#acknowledgements">Acknowledgements</a>.
 
 <a id="built-with"></a>
 ### Built With
