@@ -30,6 +30,8 @@
             ]
         },
         "View System Info": 0,
-        "Clear Error Code": 0
+        "Clear Error Code": 0,
+        "Update Forecasts": 0,
+        "Update Current Conditions": 0
     }
 }

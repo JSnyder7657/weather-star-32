@@ -55,6 +55,51 @@ void fill_rect_v_gradient(int16_t x, int16_t y, int w, int h, uint32_t color_1, 
     }
 }
 
+//*********************************************************************************************************************
+
+void add_image_to_fs(const uint16_t *image_data, const char *file_name, int size) {
+        ESP_LOGI(TAG_INFO, "Opening file %s", file_name);
+        
+        char path_buffer[FILE_PATH_BUFFER_SIZE];
+        snprintf(path_buffer, FILE_PATH_BUFFER_SIZE, "%s/%s", BASE_PATH, file_name);
+        FILE *f = fopen(path_buffer, "wb");
+        if (f == NULL) {
+            ESP_LOGE(TAG_ERROR, "Failed to open file for writing");
+            return;
+        }
+
+        if (fwrite(image_data, sizeof(uint16_t), size, f) < size) {
+            ESP_LOGI(TAG_ERROR, "Error during fwrite().");
+        } else {
+            ESP_LOGI(TAG_INFO, "File written");
+        }
+        
+        fclose(f);
+}
+
+uint16_t *get_image_data_from_fs(const char *file_name, size_t size) {
+    char file_path_buffer[FILE_PATH_BUFFER_SIZE];
+    snprintf(file_path_buffer, FILE_PATH_BUFFER_SIZE, "%s/%s", BASE_PATH, file_name);
+    FILE *f = fopen(file_path_buffer, "rb");
+    if (f == NULL) {
+        error_bits = ERROR_FS_LOAD;
+        ESP_LOGE(TAG_ERROR, "Error reading \"%s\".", file_name);
+        return NULL;
+    }
+    uint16_t *bitmap_buffer = (uint16_t*) malloc(size * sizeof(uint16_t));
+    if (bitmap_buffer == NULL) {
+        error_bits = ERROR_FS_LOAD;
+        ESP_LOGE(TAG_ERROR, "Error mallocing \"%s\".", file_name);
+        return NULL;
+    }
+    fread(bitmap_buffer, sizeof(uint16_t), size, f);
+    fclose(f);
+
+    return bitmap_buffer;
+}
+
+//*********************************************************************************************************************
+
 char* string_to_lower(const char *str) {
 	size_t len = strlen(str) + 1;
 	char *lower_str = (char*) malloc(len);
@@ -91,16 +136,28 @@ bool compare_strings(const char *str_1, const char *str_2, int usr_comp_size) {
 	return result;
 }
 
-bool string_contains(const char *str_1, const char *str_2) {
-	char *lower_str_1 = string_to_lower(str_1);
-	char *lower_str_2 = string_to_lower(str_2);
+bool string_contains(const char *str_1, const char *str_2, bool case_sensitive) {
+    if (!case_sensitive) {
+	    char *lower_str_1 = string_to_lower(str_1);
+	    char *lower_str_2 = string_to_lower(str_2);
 
-	char *result = strstr(lower_str_1, lower_str_2);
+        char *result = strstr(lower_str_1, lower_str_2);
 
-	free(lower_str_1);
-	free(lower_str_2);
+	    free(lower_str_1);
+	    free(lower_str_2);
 
-	return result != NULL;
+        return result != NULL;
+    }
+
+	return strstr(str_1, str_2) != NULL;
+}
+
+//*********************************************************************************************************************
+
+time_t get_utc_time_t_from_str(const char *datetime_str, const char *format) {
+    struct tm tm;
+    strptime(datetime_str, format, &tm);
+    return mktime(&tm);
 }
 
 //*********************************************************************************************************************
@@ -124,8 +181,13 @@ void exit_menu() {
     curr_section_lead_node = root_menu_node->first_child;
     curr_menu_node = curr_section_lead_node;
     curr_menu_pos = 0;
-    curr_state = STATE_CC;
-    refresh_display = true;
+
+    // Return to the main state cc view and reset the main state cycle timer.
+    curr_state = STATE_MAIN;
+    main_state_list.curr_node = main_state_list.root_node;
+    ESP_LOGI(TAG_INFO, "Resetting main_view_cycle_timer ...");
+    xTimerReset(main_view_cycle_timer, 0);
+    xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 }
 
 void perform_menu_action() {
@@ -136,37 +198,45 @@ void perform_menu_action() {
 			curr_section_lead_node = curr_parent_node->first_child;
 			curr_menu_node = curr_section_lead_node;
 			curr_menu_pos = 0;
-            refresh_display = true;
+            xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 		} else {
             exit_menu();
         }
     } else if (compare_strings(MENU_OPTION_SYSTEM_INFO, curr_menu_node->data, -1)) {
         curr_state = STATE_SI;
-        refresh_display = true;
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 	} else if (compare_strings(MENU_OPTION_CLEAR_ERROR_CODE, curr_menu_node->data, -1)) {
-        error_bits = 0b00000000;
+        error_bits = 0x00;
     } else if (compare_strings(MENU_OPTION_SYSTEM_INFO, curr_menu_node->data, -1)) {
         curr_state = STATE_SI;
-        refresh_display = true; 
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+    } else if (compare_strings(MENU_OPTION_UPDATE_CC, curr_menu_node->data, -1)) {
+        xTaskNotifyGiveIndexed(cc_task_handle, 0);
+        xTimerReset(cc_refresh_timer, 0);
+        exit_menu();
+    } else if (compare_strings(MENU_OPTION_UPDATE_FORECASTS, curr_menu_node->data, -1)) {
+        xTaskNotifyGiveIndexed(forecast_task_handle, 0);
+        xTimerReset(forecast_refresh_timer, 0);
+        exit_menu();
     } else if (compare_strings(MENU_OPTION_CLEAR, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_CLEAR);
+        memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
+        snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_CLEAR);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_CLOUDY, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_CLOUDY);
+        memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
+        snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_CLOUDY);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_PARTLY_CLOUDY, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_PARTLY_CLOUDY);
+        memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
+        snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_PARTLY_CLOUDY);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_SCATTERED_SHOWERS, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_SCATTERED_SHOWERS);
+        memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
+        snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_SCATTERED_SHOWERS);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_THUNDERSTORM, curr_menu_node->data, -1)) {
-        memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_THUNDERSTORM);
+        memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
+        snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_THUNDERSTORM);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_TORNADO_WARNING, curr_menu_node->data, -1)) {
         add_test_alert(MENU_OPTION_TORNADO_WARNING, JSON_EXTREME);
@@ -226,35 +296,74 @@ esp_err_t http_event_handler(esp_http_client_event_t *evt) {
 
 //*********************************************************************************************************************
 
-void draw_header_rect() {
-    fill_rect_v_gradient(0, 10, 210, 40, DGX_COPPER(dgx_rgb_to_16), DGX_NAVY(dgx_rgb_to_16));
+void add_main_state(const uint8_t state, struct ForecastNode *forecasts_root_node) {
+    struct MainStateNode *new_node = (struct MainStateNode *) calloc(1, sizeof(struct MainStateNode));
+    new_node->state = state;
+    new_node->forecasts_root_node = forecasts_root_node;
+
+    if (main_state_list.root_node->next_node == NULL) {
+        main_state_list.root_node->next_node = new_node;
+    } else {
+        struct MainStateNode *temp_node = main_state_list.root_node;
+        while (temp_node->next_node != main_state_list.root_node) {
+            temp_node = temp_node->next_node;
+        }
+        temp_node->next_node = new_node;
+    }
+    new_node->next_node = main_state_list.root_node;
 }
 
-void draw_string(const char *str, int16_t x, int16_t y, uint32_t color, int scale) {
-    dgx_font_string_utf8_screen(tft, x + SHADOW_OFFSET, y + SHADOW_OFFSET, str, DGX_BLACK(dgx_rgb_to_16), 
-        DgxOutputNormal, scale, DroidSansRegular9(), NULL, NULL);
-    dgx_font_string_utf8_screen(tft, x, y, str, color, DgxOutputNormal, scale, DroidSansRegular9(), NULL, NULL);
+void remove_forecast_main_states() {
+    struct MainStateNode *temp_node = main_state_list.root_node->next_node;
+    struct MainStateNode *placeholder_node;
+    while (temp_node != main_state_list.root_node && temp_node != NULL) {
+        placeholder_node = temp_node->next_node;
+        clear_forecasts_list(temp_node->forecasts_root_node);
+        free(temp_node);
+        temp_node = placeholder_node;
+    }
+}
+
+//*********************************************************************************************************************
+
+struct ForecastNode* create_forecast_node(const char *desc, const char *day, uint8_t high_temp, uint8_t low_temp,
+        const char *start_time_str, const char *end_time_str) {
+    struct ForecastNode *new_node = (struct ForecastNode*) calloc(1, sizeof(struct ForecastNode));
+    memset(new_node->desc, 0, DESC_BUFFER_SIZE);
+    snprintf(new_node->desc, DESC_BUFFER_SIZE, "%s", desc);
+    snprintf(new_node->day, DAY_BUFFER_SIZE, "%s", day);
+    new_node->high_temp = high_temp;
+    new_node->low_temp = low_temp;
+    new_node->start_time = get_utc_time_t_from_str(start_time_str, DATE_TIME_STRING_FORMAT);
+    new_node->end_time = get_utc_time_t_from_str(end_time_str, DATE_TIME_STRING_FORMAT);
+
+    return new_node;
+}
+
+void clear_forecasts_list(struct ForecastNode *root_node) {
+    struct ForecastNode *temp_node = root_node;
+    struct ForecastNode *placeholder_node;
+    while (temp_node != NULL) {
+        placeholder_node = temp_node->next_node;
+        free(temp_node);
+        temp_node = placeholder_node;
+    }
+}
+
+//*********************************************************************************************************************
+
+void draw_header_rect() {
+    fill_rect_v_gradient(0, 10, 210, 40, DGX_COPPER(dgx_rgb_to_16), DGX_NAVY(dgx_rgb_to_16));
 }
 
 void draw_header_string(const char *str) {
     draw_string(str, 10, 35, DGX_YELLOW(dgx_rgb_to_16), 2);
 }
 
-void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale) {
-    if (bitmap == NULL) {
-        return;
-    }
-
-    uint8_t image_be[size * size * 2];
-
-    for (int i = 0; i < size * size; ++i) {
-        uint16_t pixel = bitmap[i];
-        image_be[2 * i] = pixel >> 8;
-        image_be[2 * i + 1] = pixel & 0xFF;
-    }
-
-    dgx_screen_t *image = dgx_vscreen_from_array(image_be, size, size, 16, DgxScreenRGB);
-    dgx_vscreen_to_screen(tft, x, y, image, DGX_VSCREEN_SCALE(scale) | DGX_VSCREEN_TRANSPARENT);
+void draw_string(const char *str, int16_t x, int16_t y, uint32_t color, int scale) {
+    dgx_font_string_utf8_screen(tft, x + SHADOW_OFFSET, y + SHADOW_OFFSET, str, DGX_BLACK(dgx_rgb_to_16), 
+        DgxOutputNormal, scale, DroidSansRegular9(), NULL, NULL);
+    dgx_font_string_utf8_screen(tft, x, y, str, color, DgxOutputNormal, scale, DroidSansRegular9(), NULL, NULL);
 }
 
 void draw_alert(struct AlertNode *alert) {
@@ -273,61 +382,112 @@ void draw_alert(struct AlertNode *alert) {
     draw_string(alert->data, 0, 20, DGX_WHITE(dgx_rgb_to_16), 2);
 }
 
-void draw_condition_clear() {
-    uint16_t *bitmap = get_image_data_from_fs(FILE_SUN_BIN);
-    draw_bitmap(bitmap, 32, 70, 85, 3);
+void draw_date_time() {
+    draw_string(date, DATE_X_POS, DATE_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
+    draw_string(time_, TIME_X_POS, TIME_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
+}
+
+void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale) {
+    if (bitmap == NULL) {
+        return;
+    }
+
+    uint8_t image_be[size * size * 2];
+
+    for (int i = 0; i < size * size; ++i) {
+        uint16_t pixel = bitmap[i];
+        image_be[2 * i] = pixel >> 8;
+        image_be[2 * i + 1] = pixel & 0xFF;
+    }
+
+    dgx_screen_t *image = dgx_vscreen_from_array(image_be, size, size, 16, DgxScreenRGB);
+    dgx_vscreen_to_screen(tft, x, y, image, DGX_VSCREEN_SCALE(scale) | DGX_VSCREEN_TRANSPARENT);
+    free(image);
+}
+
+void draw_low_arrow_bitmap(int size, int x, int y, uint32_t scale) {
+    uint16_t *image_data = get_image_data_from_fs(FILE_LOW_BIN, ICON_IMG_SIZE);
+    draw_bitmap(image_data, size, x, y, scale);
+    free(image_data);
+}
+
+void draw_high_arrow_bitmap(int size, int x, int y, uint32_t scale) {
+    uint16_t *image_data = get_image_data_from_fs(FILE_HIGH_BIN, ICON_IMG_SIZE);
+    draw_bitmap(image_data, size, x, y, scale);
+    free(image_data);
+}
+
+void draw_dew_point_bitmap(int size, int x, int y, uint32_t scale) {
+    uint16_t *image_data = get_image_data_from_fs(FILE_DEWPOINT_BIN, 1024);
+    draw_bitmap(image_data, size, x, y, scale);
+    free(image_data);
+}
+
+void draw_logo_bitmap(int size, int x, int y, uint32_t scale) {
+    uint16_t *image_data = get_image_data_from_fs(FILE_LOGO_BIN, LOGO_IMG_SIZE);
+    draw_bitmap(image_data, size, x, y, scale);
+    free(image_data);
+}
+
+void draw_condition_bitmap(const char *condition, int size, int x, int y, uint32_t scale) {
+    if (string_contains(condition, CC_CLEAR, false) || string_contains(condition, JSON_SUNNY, false)) {
+        draw_condition_clear(size, x, y, scale);
+    } else if (string_contains(condition, CC_PARTLY, false)) {
+        draw_condition_partly_cloudy(size, x, y, scale);
+    } else if (string_contains(condition, CC_CLOUDY, false)) {
+        draw_condition_cloudy(size, x, y, scale);
+    } else if (string_contains(condition, CC_THUNDER, false)) {
+        draw_condition_storm(size, x, y, scale);
+    } else if (string_contains(condition, CC_RAIN, false) || string_contains(condition, CC_SHOWERS, false)) {
+        draw_condition_rain(size, x, y, scale);
+    } else {
+        draw_condition_unknown(size, x, y, scale);
+    }
+}
+
+void draw_condition_clear(int size, int x, int y, uint32_t scale) {
+    uint16_t *bitmap = get_image_data_from_fs(FILE_SUN_BIN, ICON_IMG_SIZE);
+    draw_bitmap(bitmap, size, x, y, scale);
     free(bitmap);
 }
 
-void draw_condition_cloudy() {
-    uint16_t *bitmap = get_image_data_from_fs(FILE_CLOUD_BIN);
-    draw_bitmap(bitmap, 32, 50, 110, 2);
-    draw_bitmap(bitmap, 32, 80, 90, 2);
-    draw_bitmap(bitmap, 32, 110, 105, 2);
+void draw_condition_cloudy(int size, int x, int y, uint32_t scale) {
+    uint16_t *bitmap = get_image_data_from_fs(FILE_CLOUD_BIN, ICON_IMG_SIZE);
+    draw_bitmap(bitmap, size, x, y, scale);
+    draw_bitmap(bitmap, size, x + 30, y - 20, scale);
+    draw_bitmap(bitmap, size, x + 60, y - 5, scale);
     free(bitmap);
 }
 
-void draw_condition_partly_cloudy() {
-    uint16_t *sun_bitmap = get_image_data_from_fs(FILE_SUN_BIN);
-    uint16_t *cloud_bitmap = get_image_data_from_fs(FILE_CLOUD_BIN);
-    draw_bitmap(sun_bitmap, 32, 70, 85, 3);
-    draw_bitmap(cloud_bitmap, 32, 75, 85, 3);
+void draw_condition_partly_cloudy(int size, int x, int y, uint32_t scale) {
+    uint16_t *sun_bitmap = get_image_data_from_fs(FILE_SUN_BIN, ICON_IMG_SIZE);
+    uint16_t *cloud_bitmap = get_image_data_from_fs(FILE_CLOUD_BIN, ICON_IMG_SIZE);
+    // draw_bitmap(sun_bitmap, 32, 70, 85, 3);
+    // draw_bitmap(cloud_bitmap, 32, 75, 85, 3);
+    draw_bitmap(sun_bitmap, size, x, y, scale);
+    draw_bitmap(cloud_bitmap, size, x + 5, y, scale);
     free(sun_bitmap);
     free(cloud_bitmap);
 }
 
-void draw_condition_rain() {
-    uint16_t *rain_bitmap = get_image_data_from_fs(FILE_RAIN_BIN);
-    draw_bitmap(rain_bitmap, 32, 70, 85, 3);
+void draw_condition_rain(int size, int x, int y, uint32_t scale) {
+    uint16_t *rain_bitmap = get_image_data_from_fs(FILE_RAIN_BIN, ICON_IMG_SIZE);
+    draw_bitmap(rain_bitmap, size, x, y, scale);
     free(rain_bitmap);
 }
 
-void draw_condition_storm() {
-    uint16_t *storm_bitmap = get_image_data_from_fs(FILE_STORM_BIN);
-    draw_bitmap(storm_bitmap, 32, 70, 85, 3);
+void draw_condition_storm(int size, int x, int y, uint32_t scale) {
+    uint16_t *storm_bitmap = get_image_data_from_fs(FILE_STORM_BIN, ICON_IMG_SIZE);
+    // draw_bitmap(storm_bitmap, 32, 70, 85, 3);
+    draw_bitmap(storm_bitmap, size, x, y, scale);
     free(storm_bitmap);
 }
 
-void draw_condition_unknown() {
-    uint16_t *unknown_bitmap = get_image_data_from_fs(FILE_UNKNOWN_BIN);
-    draw_bitmap(unknown_bitmap, 32, 70, 85, 3);
+void draw_condition_unknown(int size, int x, int y, uint32_t scale) {
+    uint16_t *unknown_bitmap = get_image_data_from_fs(FILE_UNKNOWN_BIN, ICON_IMG_SIZE);
+    // draw_bitmap(unknown_bitmap, 32, 70, 85, 3);
+    draw_bitmap(unknown_bitmap, size, x, y, scale);
     free(unknown_bitmap);
-}
-
-uint16_t *get_image_data_from_fs(const char *file_name) {
-    char file_path_buffer[FILE_PATH_BUFFER_SIZE];
-    snprintf(file_path_buffer, FILE_PATH_BUFFER_SIZE, "%s/%s", BASE_PATH, file_name);
-    FILE *f = fopen(file_path_buffer, "rb");
-    if (f == NULL) {
-        error_bits = ERROR_FS_LOAD;
-        ESP_LOGE(TAG_ERROR, "Error reading \"%s\".", file_name);
-        return NULL;
-    }
-    uint16_t *bitmap_buffer = (uint16_t*) malloc(1024 * sizeof(uint16_t));
-    fread(bitmap_buffer, 1024, sizeof(uint16_t), f);
-    fclose(f);
-
-    return bitmap_buffer;
 }
 
 void clear_screen() {
@@ -375,13 +535,10 @@ bool add_test_alert(const char *event, const char *severity) {
 }
 
 bool add_alert(const char *event, const char *alert_exp_date_time, const char *severity) {
-    struct tm tm;
-    strptime(alert_exp_date_time, DATE_TIME_STRING_FORMAT, &tm);
-
     struct AlertNode *new_node = (struct AlertNode*) calloc(1, sizeof(struct AlertNode));
     snprintf(new_node->data, MENU_NODE_DATA_BUFFER_SIZE, "%s", event);
     snprintf(new_node->severity, SEVERITY_BUFFER_SIZE, "%s", severity);
-    new_node->expire_time = timegm(&tm);
+    new_node->expire_time = get_utc_time_t_from_str(alert_exp_date_time, DATE_TIME_STRING_FORMAT);
     
     if (alert_list.root_node == NULL) {
         alert_list.root_node = new_node;
@@ -598,6 +755,8 @@ bool update_alerts() {
 
     cJSON_Delete(cjson_root);
 
+    ESP_LOGI(TAG_INFO, "Finished updating alerts: %lu B", esp_get_free_heap_size());
+
     return alerts_added;
 }
 
@@ -744,28 +903,33 @@ bool update_curr_conditions() {
     }
 
     // Temperature
+    int temperature = main_state_list.root_node->cc.temperature;
     cJSON *cjson_temperature = cJSON_GetObjectItem(cjson_properties, JSON_TEMPERATURE);
     if (cjson_temperature == NULL) {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing temperature from JSON.");
     } else {
-        temperature = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_temperature, JSON_VALUE));
-        set_int_temperature_val(&temperature);
-        ESP_LOGI(TAG_INFO, "Set temperature.");
+        cJSON *value_obj = cJSON_GetObjectItem(cjson_temperature, JSON_VALUE);
+        if (cJSON_IsNumber(value_obj)) {
+            temperature = cJSON_GetNumberValue(value_obj);
+            set_int_temperature_val(&temperature);
+        }
     }
 
     // Description
+    char desc_buffer[DESC_BUFFER_SIZE];
     cJSON *cjson_desc = cJSON_GetObjectItem(cjson_properties, JSON_TEXT_DESCRIPTION);
     if (cjson_desc == NULL) {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing description from JSON.");
     } else {
-        memset(cc_desc, 0, DESC_BUFFER_SIZE);
-        snprintf(cc_desc, DESC_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_desc));
+        memset(desc_buffer, 0, DESC_BUFFER_SIZE);
+        snprintf(desc_buffer, DESC_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_desc));
         ESP_LOGI(TAG_INFO, "Set description");
     }
 
     // Wind speed
+    float wind_speed = main_state_list.root_node->cc.wind_speed;
     cJSON *cjson_wind_speed = cJSON_GetObjectItem(cjson_properties, JSON_WIND_SPEED);
     if (cjson_wind_speed == NULL) {
         error_bits = ERROR_P_JSON;
@@ -776,16 +940,19 @@ bool update_curr_conditions() {
     }
 
     // Wind direction
+    float wind_dir_f = main_state_list.root_node->cc.wind_dir_f;
+    char wind_dir_buffer[WIND_DIR_BUFFER_SIZE];
     cJSON *cjson_wind_dir = cJSON_GetObjectItem(cjson_properties, JSON_WIND_DIR);
     if (cjson_wind_dir == NULL) {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing wind direction from JSON.");
     } else {
-        wind_direction = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_wind_dir, JSON_VALUE));
+        wind_dir_f = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_wind_dir, JSON_VALUE));
         ESP_LOGI(TAG_INFO, "Wind direction");
     }
 
     // Dew point
+    float dew_point = main_state_list.root_node->cc.dew_point;
     cJSON *cjson_dew_point = cJSON_GetObjectItem(cjson_properties, JSON_DEWPOINT);
     if (cjson_dew_point == NULL) {
         error_bits = ERROR_P_JSON;
@@ -799,35 +966,46 @@ bool update_curr_conditions() {
     cJSON_Delete(cjson_root);
 
     // Calculate the wind direction string
-    memset(wind_dir, 0, WIND_DIR_BUFFER_SIZE);
+    memset(wind_dir_buffer, 0, WIND_DIR_BUFFER_SIZE);
 
-    if (wind_direction <= 15.0f || wind_direction > 345.0f) {           // North
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_N);
-    } else if (wind_direction > 15.0f && wind_direction <= 75.0f) {     // North-west
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_NW);
-    } else if (wind_direction > 75.0f && wind_direction <= 105.0f) {    // West
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_W);
-    } else if (wind_direction > 105.0f && wind_direction <= 165.0f) {   // South-west
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_SW);
-    } else if (wind_direction > 165.0f && wind_direction <= 195.0f) {   // South
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_S);
-    } else if (wind_direction > 195.0f && wind_direction <= 255.0f) {   // South-east
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_SE);
-    } else if (wind_direction > 255.0f && wind_direction <= 285.0f) {   // East
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_E);
+    if (wind_dir_f <= 15.0f || wind_dir_f > 345.0f) {           // North
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_N);
+    } else if (wind_dir_f > 15.0f && wind_dir_f <= 75.0f) {     // North-west
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_NW);
+    } else if (wind_dir_f > 75.0f && wind_dir_f <= 105.0f) {    // West
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_W);
+    } else if (wind_dir_f > 105.0f && wind_dir_f <= 165.0f) {   // South-west
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_SW);
+    } else if (wind_dir_f > 165.0f && wind_dir_f <= 195.0f) {   // South
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_S);
+    } else if (wind_dir_f > 195.0f && wind_dir_f <= 255.0f) {   // South-east
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_SE);
+    } else if (wind_dir_f > 255.0f && wind_dir_f <= 285.0f) {   // East
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_E);
     } else {                                                            // North-east
-        snprintf(wind_dir, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_NE);
+        snprintf(wind_dir_buffer, WIND_DIR_BUFFER_SIZE, "%s", WIND_DIR_NE);
     }
 
-    ESP_LOGI(TAG_INFO, "Got current conditions");
+    // Update the current conditions main state node with the retrieved data.
+    snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", desc_buffer);
+    main_state_list.root_node->cc.dew_point = dew_point;
+    main_state_list.root_node->cc.temperature = temperature;
+    snprintf(main_state_list.root_node->cc.wind_dir, WIND_DIR_BUFFER_SIZE, "%s", wind_dir_buffer);
+    main_state_list.root_node->cc.wind_speed = wind_speed;
+
+    ESP_LOGI(TAG_INFO, "Finished updating current conditions: %lu B", esp_get_free_heap_size());
 
     return true;
 }
 
 bool update_forecast() {
-    ESP_LOGI(TAG_INFO, "Getting forecast ...");
+    // Clear the forecasts we currently have stored.
+    ESP_LOGI(TAG_INFO, "Removing existing forecast main states ...");
+    remove_forecast_main_states();
 
     // Configure the HTTP client.
+    ESP_LOGI(TAG_INFO, "Getting new forecasts ...");
+
 	size_t request_url_size = strlen(API_HOST) + strlen(NWS_API_POINTS_URL_PART) + strlen(LATITUDE) 
         + strlen(LAT_LONG_DELIM) + strlen(LONGITUDE) + 1;
     if (request_url_size > REQUEST_URL_BUFFER_SIZE) {
@@ -861,18 +1039,21 @@ bool update_forecast() {
     if (cjson_root == NULL) {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse forecast JSON");
+        cJSON_Delete(cjson_root);
         return false;
     }
     cJSON *cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
     if (cjson_properties == NULL) {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse forecast JSON");
+        cJSON_Delete(cjson_root);
         return false;
     }
     cJSON *cjson_forecast = cJSON_GetObjectItem(cjson_properties, JSON_FORECAST);
     if (cjson_forecast == NULL) {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse forecast item from forecast JSON");
+        cJSON_Delete(cjson_root);
         return false;
     }
     memset(request_url, 0, REQUEST_URL_BUFFER_SIZE);
@@ -892,57 +1073,136 @@ bool update_forecast() {
     }
     esp_http_client_cleanup(client);
 
-    // Iterate through the "periods" until we get the first "isDaytTime": true object.
     cjson_root = cJSON_Parse(http_response_buffer);
     if (cjson_root == NULL) {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse forecast response from forecast JSON");
+        cJSON_Delete(cjson_root);
         return false;
     }
     cjson_properties = cJSON_GetObjectItem(cjson_root, JSON_PROPERTIES);
     if (cjson_properties == NULL) {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse forecast response properties from forecast JSON");
+        cJSON_Delete(cjson_root);
         return false;
     }
     cJSON *cjson_periods_array = cJSON_GetObjectItem(cjson_properties, JSON_PERIODS);
     if (cjson_periods_array == NULL) {
         error_bits = ERROR_SP_JSON;
         ESP_LOGE(TAG_ERROR, "Failed to parse periods array from forecast JSON");
+        cJSON_Delete(cjson_root);
         return false;
     }
-    int count = cJSON_GetArraySize(cjson_periods_array);
-    uint32_t i;
-    bool is_day_time = false;
+
+    // Iterate through the periods so we can get our extended forecasts.
+    char desc_buffer[DESC_BUFFER_SIZE], day_buffer[DAY_BUFFER_SIZE + 16], temp_day_buffer[DAY_BUFFER_SIZE + 16],
+        start_time_buffer[DATE_TIME_STRING_BUFFER_SIZE], end_time_buffer[DATE_TIME_STRING_BUFFER_SIZE];
+    uint8_t high_temp, low_temp = 0;
+    struct ForecastNode *forecasts_root_node = NULL;
+
     cJSON *cjson_array_item = NULL;
+    cJSON *cjson_temp_array_item = NULL;
     cJSON *cjson_array_obj_item = NULL;
+    int arr_count = cJSON_GetArraySize(cjson_periods_array);
+    int count = arr_count > MAX_EF_COUNT ? MAX_EF_COUNT : arr_count;  // No more than 5
+    uint32_t i;
+    uint8_t itr_count = 0;
     for (i = 0; i < count; i++) {
+        if (i == arr_count) {
+            break;
+        }
+        
+        // Get the object at array index i.
         cjson_array_item = cJSON_GetArrayItem(cjson_periods_array, i);
         if (cjson_array_item == NULL) {
             error_bits = ERROR_P_JSON;
-            ESP_LOGI(TAG_ERROR, "%s %i", "Failed parsing periods array from object.");
-            return false;
-        }
-        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_IS_DAYTIME);
-        if (cjson_array_obj_item == NULL || cJSON_IsFalse(cjson_array_obj_item)) {
+            ESP_LOGI(TAG_ERROR, "Failed parsing periods array from object at index %d.", i);
             continue;
         }
-        is_day_time = true;
-        break;
-    }
-    if (is_day_time) {
-        cJSON *cjson_temperature = cJSON_GetObjectItem(cjson_array_item, JSON_TEMPERATURE);
-        if (cjson_temperature == NULL) {
-            error_bits = ERROR_SP_JSON;
-            ESP_LOGE(TAG_ERROR, "Failed to parse high temperature from forecast JSON");
-            return false;
+
+        // Get the day. If it's "Tonight," then we need to grab the temperature, add it to the current condition's
+        // low_temp field, and move on.
+        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_NAME);
+        snprintf(day_buffer, DAY_BUFFER_SIZE + 16, "%s", cJSON_GetStringValue(cjson_array_obj_item));
+        if (compare_strings(day_buffer, JSON_TONIGHT, -1)) {
+            cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_TEMPERATURE);
+            main_state_list.root_node->cc.low_temp = cJSON_GetNumberValue(cjson_array_obj_item);
+            count++;
+            continue;
         }
-        high_temperature= cJSON_GetNumberValue(cjson_temperature);
+
+        // If this is the first period, we need to add the high temp ir low temp to the current conditions, then
+        // move on.
+        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_IS_DAYTIME);
+        bool is_day_time = cJSON_IsTrue(cjson_array_obj_item);
+        if (i == 0) {
+            cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_TEMPERATURE);
+            if (is_day_time) {
+                main_state_list.root_node->cc.high_temp = cJSON_GetNumberValue(cjson_array_obj_item);
+            } else {
+                main_state_list.root_node->cc.low_temp = cJSON_GetNumberValue(cjson_array_obj_item);
+            }
+            count++;
+            continue;
+        } else if (!is_day_time) {  // Skip iterating over night periods, we'll do this ourselves.
+            count++;
+            continue;
+        }
+
+        // High temp
+        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_TEMPERATURE);
+        high_temp = cJSON_GetNumberValue(cjson_array_obj_item);
+
+        // Short forecast
+        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_SHORT_FORECAST);
+        snprintf(desc_buffer, DESC_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_array_obj_item));
+
+        // Start time (local)
+        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_START_TIME);
+        snprintf(start_time_buffer, DATE_TIME_STRING_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_array_obj_item));
+
+        // End time (local) 
+        cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_END_TIME);
+        snprintf(end_time_buffer, DATE_TIME_STRING_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_array_obj_item));
+
+        // We now need to iterate through until we get to the corresponding night time period for this day. We need to
+        // grab the low tempearture from it.
+        int j;
+        for (j = i + 1; j < count; j++) {
+            cjson_temp_array_item = cJSON_GetArrayItem(cjson_periods_array, j);
+            cjson_array_obj_item = cJSON_GetObjectItem(cjson_temp_array_item, JSON_NAME);
+            snprintf(temp_day_buffer, DAY_BUFFER_SIZE + 16, "%s", cJSON_GetStringValue(cjson_array_obj_item));
+            if (string_contains(temp_day_buffer, JSON_NIGHT, true) && 
+                    string_contains(temp_day_buffer, day_buffer, true)) {
+                cjson_array_obj_item = cJSON_GetObjectItem(cjson_temp_array_item, JSON_TEMPERATURE);
+                low_temp = cJSON_GetNumberValue(cjson_array_obj_item);
+                break;
+            }
+        }
+
+        // Add a new extended forecast node
+        struct ForecastNode *new_node = create_forecast_node(desc_buffer, day_buffer, high_temp, low_temp, 
+            start_time_buffer, end_time_buffer);
+        if (forecasts_root_node == NULL) {
+            forecasts_root_node = new_node;
+        } else {
+            forecasts_root_node->next_node = new_node;
+        }
+
+        // Add a forecast main state node every 2 forecasts or if we were only able to retrieve 1.
+        if (++itr_count == 2 || count == 1) {
+            add_main_state(STATE_MAIN_FORECAST, forecasts_root_node);
+            forecasts_root_node = NULL;
+            itr_count = 0;
+        }
     }
 
     cJSON_Delete(cjson_root);
 
-    return is_day_time;
+    ESP_LOGI(TAG_INFO, "Finished updating forecasts: %lu B", esp_get_free_heap_size());
+
+    return true;
 }
 
 bool update_seven_seg() {
@@ -954,7 +1214,7 @@ bool update_seven_seg() {
     }
 
     // We need to output the current error code serially to the register.
-    uint8_t register_val = 0b00000000;
+    uint8_t register_val = 0x00;
 	
 	uint8_t seven_seg_a = (!error_arr[1] && !error_arr[3]) || (!error_arr[0] && error_arr[2]) 
 		|| (error_arr[1] && error_arr[2]) || (error_arr[0] && !error_arr[3]) 
@@ -1009,7 +1269,7 @@ void update_menu(bool menu, bool menu_up, bool menu_down) {
 			curr_menu_pos = starting_index;
             ESP_LOGI(TAG_INFO, "curr_section_lead_node: %s", curr_section_lead_node->data);
 		}
-        refresh_display = true;
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 	} else if (menu_down && (curr_menu_node->next_sibling != NULL)) {
 		curr_menu_node = curr_menu_node->next_sibling;
 		curr_menu_pos++;
@@ -1017,18 +1277,30 @@ void update_menu(bool menu, bool menu_up, bool menu_down) {
 			curr_section_lead_node = curr_menu_node;
             curr_menu_pos = 0;
 		}
-        refresh_display = true;
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 	} else if (menu) {
 		if (curr_menu_node->first_child != NULL) {
 			curr_parent_node = curr_menu_node;
 			curr_menu_node = curr_menu_node->first_child;
 			curr_section_lead_node = curr_menu_node;
 			curr_menu_pos = 0;
-            refresh_display = true;		
+            xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 		} else {
 			perform_menu_action();
 		}
 	}
+}
+
+void update_curr_alert() {
+    if (alert_list.root_node == NULL) {
+        return;
+    }
+    alert_list.curr_node = alert_list.curr_node->next_node;
+    if (alert_list.curr_node == NULL) {
+        alert_list.curr_node = alert_list.root_node;
+    }
+    
+    xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 }
 
 //*********************************************************************************************************************
@@ -1044,59 +1316,113 @@ void draw_cc_view() {
     draw_header_string(HEADER_CURR_CONDITIONS);
 
     // Draw container rectangle
-    dgx_fill_rectangle(tft, 5, 60, 310, 170, DGX_DARKCYAN(dgx_rgb_to_16));
-    dgx_fill_rectangle(tft, 7, 62, 306, 166, CC_CONTAINER_COLOR);
+    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS, CC_CONTAINER_Y_POS, CC_CONTAINER_W, CC_CONTAINER_H, 
+        DGX_DARKCYAN(dgx_rgb_to_16));
+    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS + 2, CC_CONTAINER_Y_POS + 2, CC_CONTAINER_W - 4, CC_CONTAINER_H - 4, 
+        CC_CONTAINER_COLOR);
 
     // Write the date and time.
-    draw_string(date, 220, 25, DGX_WHITE(dgx_rgb_to_16), 2);
-    draw_string(time_, 240, 45, DGX_WHITE(dgx_rgb_to_16), 2);
+    draw_date_time();
 
     // Write the high.
-    char high_temp_buff[10];
-    memset(high_temp_buff, 0, 10);
-    snprintf(high_temp_buff, 10, ": %i %c", high_temperature, temperature_char);
-    draw_string("H", 250, 95, DGX_YELLOW(dgx_rgb_to_16), 2);
-    draw_string(high_temp_buff, 263, 95, DGX_WHITE(dgx_rgb_to_16), 2);
+    char hl_buff[5];
+    memset(hl_buff, 0, 5);
+    snprintf(hl_buff, 5, "%d", main_state_list.root_node->cc.high_temp);
+    draw_high_arrow_bitmap(32, CC_HIGH_ARR_X_POS, CC_ARR_Y_POS, 1);
+    draw_string(hl_buff, CC_HIGH_TEMP_X_POS, CC_HIGH_LOW_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 
+        CC_HIGH_LOW_TEMP_FONT_SCALE);
+
+    // Write the low.
+    memset(hl_buff, 0, 5);
+    snprintf(hl_buff, 5, "%d", main_state_list.root_node->cc.low_temp);
+    draw_low_arrow_bitmap(32, CC_LOW_ARR_X_POS, CC_ARR_Y_POS, 1);
+    draw_string(hl_buff, CC_LOW_TEMP_X_POS, CC_HIGH_LOW_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 
+        CC_HIGH_LOW_TEMP_FONT_SCALE);
 
     // Write the temperature.
     char temp_buff[5];
     memset(temp_buff, 0, 5);
-    snprintf(temp_buff, 5, "%i %c", temperature, temperature_char);
-    draw_string(temp_buff, 250, 130, DGX_WHITE(dgx_rgb_to_16), 3);
+    snprintf(temp_buff, 5, "%i %c", main_state_list.root_node->cc.temperature, temperature_char);
+    draw_string(temp_buff, CC_TEMP_X_POS, CC_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 3);
 
     // Write the wind data.
     uint16_t wind_buff_size = 10 + WIND_DIR_BUFFER_SIZE;
     char wind_buff[wind_buff_size];
     memset(wind_buff, 0, wind_buff_size);
-    snprintf(wind_buff, wind_buff_size, "%s %.1f mph", wind_dir, wind_speed);
-    draw_string(wind_buff, 210, 160, DGX_WHITE(dgx_rgb_to_16), 2);
+    snprintf(wind_buff, wind_buff_size, "%s %.1f mph", main_state_list.root_node->cc.wind_dir, 
+        main_state_list.root_node->cc.wind_speed);
+    draw_string(wind_buff, CC_WIND_X_POS, CC_WIND_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
 
     // Write the dew point
     char dew_point_buff[8];
     memset(dew_point_buff, 0, 8);
-    snprintf(dew_point_buff, 8, "%.1f %c", dew_point, temperature_char);
-    draw_string(dew_point_buff, 240, 185, DGX_WHITE(dgx_rgb_to_16), 2);
-    uint16_t *dew_point_bitmap = get_image_data_from_fs(FILE_DEWPOINT_BIN);
-    draw_bitmap(dew_point_bitmap, 16, 225, 172, 1);
-    free(dew_point_bitmap);
+    snprintf(dew_point_buff, 8, "%.1f %c", main_state_list.root_node->cc.dew_point, temperature_char);
+    draw_string(dew_point_buff, CC_DEW_POINT_X_POS, CC_DEW_POINT_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
+    draw_dew_point_bitmap(CC_DEW_POINT_IMG_SIZE, CC_DEW_POINT_X_POS - 15, CC_DEW_POINT_IMG_Y_POS, 1);
 
     // Write the current description.
-    draw_string(cc_desc, 30, 210, DGX_WHITE(dgx_rgb_to_16), 3);
+    draw_string(main_state_list.root_node->cc.desc, CC_DESC_X_POS, CC_DESC_Y_POS, DGX_WHITE(dgx_rgb_to_16), 3);
 
     // Determine what condition to draw based on the description.
-    if (string_contains(cc_desc, CC_CLEAR)) {
-        draw_condition_clear();
-    } else if (string_contains(cc_desc, CC_PARTLY)) {
-        draw_condition_partly_cloudy();
-    } else if (string_contains(cc_desc, CC_CLOUDY)) {
-        draw_condition_cloudy();
-    } else if (string_contains(cc_desc, CC_THUNDER)) {
-        draw_condition_storm();
-    } else if (string_contains(cc_desc, CC_RAIN) || string_contains(cc_desc, CC_SHOWERS)) {
-        draw_condition_rain();
-    } else {
-        draw_condition_unknown();
+    draw_condition_bitmap(main_state_list.root_node->cc.desc, CC_CONDITIONG_IMG_SIZE, CC_CONDITION_IMG_X_POS, 
+        CC_CONDITION_IMG_Y_POS, CC_CONDITION_IMG_SCALE);
+
+    ESP_LOGI(TAG_INFO, "Finished drawing CC: %lu B", esp_get_free_heap_size());
+}
+
+void draw_forecast_view() {
+    // Clear the screen.
+    clear_screen();
+
+    // Draw the header rectangle
+    draw_header_rect();
+
+    // Draw the header text
+    draw_header_string(HEADER_EXT_FORECAST);
+
+    // Write the date and time.
+    draw_date_time();
+
+    // Draw the forecast data.
+    int i = 0;
+    int day_x_pos, container_x_pos, img_x_pos, high_temp_x_pos, low_temp_x_pos;
+    struct ForecastNode *temp_node = main_state_list.curr_node->forecasts_root_node;
+    char temperature_buffer[EF_TEMP_BUFFER_SIZE];
+    while (temp_node != NULL) {
+        // Draw container rectangle
+        container_x_pos = i == 0 ? EF_DAY_1_CONTAINER_X_POS : EF_DAY_2_CONTAINER_X_POS;
+        dgx_fill_rectangle(tft, container_x_pos, EF_CONTAINER_Y_POS, EF_CONTAINER_W + 4, EF_CONTAINER_H + 4, 
+            DGX_DARKCYAN(dgx_rgb_to_16));
+        dgx_fill_rectangle(tft, container_x_pos + 2, EF_CONTAINER_Y_POS + 2, EF_CONTAINER_W, EF_CONTAINER_H, 
+            CC_CONTAINER_COLOR);
+
+        // Write the day.
+        day_x_pos = i == 0 ? EF_DAY_1_DAY_X_POS : EF_DAY_2_DAY_X_POS;
+        draw_string(temp_node->day, day_x_pos, EF_DAY_Y_POS, DGX_WHITE(dgx_rgb_to_16), 3);
+        
+        // Draw the icon.
+        img_x_pos = i == 0 ? EF_DAY_1_IMG_X_POS : EF_DAY_2_IMG_X_POS;
+        draw_condition_bitmap(temp_node->desc, EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
+
+        // Write the high temp.
+        high_temp_x_pos = i == 0 ? EF_DAY_1_HIGH_TEMP_X_POS : EF_DAY_2_HIGH_TEMP_X_POS;
+        snprintf(temperature_buffer, EF_TEMP_BUFFER_SIZE, "%d", temp_node->high_temp);
+        draw_string(temperature_buffer, high_temp_x_pos, EF_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), EF_TEMP_FONT_SCALE);
+
+        // Write the low temp.
+        low_temp_x_pos = i == 0 ? EF_DAY_1_LOW_TEMP_X_POS : EF_DAY_2_LOW_TEMP_X_POS;
+        snprintf(temperature_buffer, EF_TEMP_BUFFER_SIZE, "%d", temp_node->low_temp);
+        draw_string(temperature_buffer, low_temp_x_pos, EF_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), EF_TEMP_FONT_SCALE);
+
+        // Draw the high and low arrows.
+        draw_low_arrow_bitmap(32, low_temp_x_pos - 35, EF_HIGH_LOW_ARR_Y_POS, 1);
+        draw_high_arrow_bitmap(32, high_temp_x_pos - 35, EF_HIGH_LOW_ARR_Y_POS, 1);
+
+        temp_node = temp_node->next_node;
+        i += 1;
     }
+
+    ESP_LOGI(TAG_INFO, "Finished drawing forecasts: %lu B", esp_get_free_heap_size());
 }
 
 void draw_menu_view() {
@@ -1121,7 +1447,6 @@ void draw_menu_view() {
     uint32_t color;
 	while (temp_curr_menu_node != NULL && i < MENU_MAX_OPTIONS_DISPLAYED) {
         snprintf(option, option_size, "%s", temp_curr_menu_node->data);
-        
 		if (temp_curr_menu_node == curr_menu_node) {
             strcat(option, cursor);
             color = DGX_ORANGE(dgx_rgb_to_16);
@@ -1149,9 +1474,13 @@ void draw_si_view() {
     // Draw system info
     char heap_size[HEAP_SIZE_BUFFER_SIZE];
     uint32_t rem_heap_size = esp_get_free_heap_size();
+    snprintf(heap_size, HEAP_SIZE_BUFFER_SIZE, "Free Heap Size: %lu B", rem_heap_size);
+    draw_string(heap_size, SI_X_POS, SI_FREE_HEAP_SIZE_Y_POS, DGX_WHITE(dgx_rgb_to_16), SI_FONT_SCALE);
+
     memset(heap_size, 0, HEAP_SIZE_BUFFER_SIZE);
-    snprintf(heap_size, HEAP_SIZE_BUFFER_SIZE, "Mem Free: %lu B", rem_heap_size);
-    draw_string(heap_size, 10, 20, DGX_WHITE(dgx_rgb_to_16), 2);
+    uint32_t min_free_heap_size = esp_get_minimum_free_heap_size();
+    snprintf(heap_size, HEAP_SIZE_BUFFER_SIZE, "Min Free Heap Size: %lu B", min_free_heap_size);
+    draw_string(heap_size, SI_X_POS, SI_MIN_FREE_HEAP_SIZE_Y_POS, DGX_WHITE(dgx_rgb_to_16), SI_FONT_SCALE);
 }
 
 void draw_curr_alert() {
@@ -1162,55 +1491,66 @@ void draw_curr_alert() {
 
 void http_get_curr_conditions(void *arg) {
     while (true) {
-        if (xSemaphoreTake(mutex, 0) == pdTRUE) {
-            refresh_display = update_curr_conditions() && curr_state == STATE_CC;
-            xSemaphoreGive(mutex);
-            // Wait for 5 minutes before the next request
-            vTaskDelay(pdMS_TO_TICKS(CURR_CONDITIONS_REFRESH_TIME_MS)); 
-        } else {
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        int semaphore_taken = xSemaphoreTake(mutex, 0);
+        while(semaphore_taken != pdTRUE) {
+            semaphore_taken = xSemaphoreTake(mutex, 0);
             vTaskDelay(pdMS_TO_TICKS(10));
         }
+        if (update_curr_conditions() && curr_state == STATE_MAIN && main_state_list.curr_node->state == STATE_MAIN_CC) {
+            xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+        }
+        xSemaphoreGive(mutex);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void http_get_forecast(void *arg) {
     while (true) {
-        if (xSemaphoreTake(mutex, 0) == pdTRUE) {
-            if (curr_day != prev_day && update_forecast() && curr_state == STATE_CC) {
-                refresh_display = true;
-                prev_day = curr_day;
-            }
-            xSemaphoreGive(mutex);
-            // Wait for 5 minutes before the next request
-            vTaskDelay(pdMS_TO_TICKS(CURR_CONDITIONS_REFRESH_TIME_MS)); 
-        } else {
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        int semaphore_taken = xSemaphoreTake(mutex, 0);
+        while(semaphore_taken != pdTRUE) {
+            semaphore_taken = xSemaphoreTake(mutex, 0);
             vTaskDelay(pdMS_TO_TICKS(10));
         }
+        if (curr_day != prev_day && update_forecast() && curr_state == STATE_MAIN) {
+            prev_day = curr_day;
+            xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+        }
+        xSemaphoreGive(mutex);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void http_get_alerts(void *arg) {
     while (true) {
-        if (xSemaphoreTake(mutex, 0) == pdTRUE) {
-            if (update_alerts()) {
-                // Reset the alert cycle timer so that we can see the new alert(s).
-                xTimerReset(alert_cycle_timer, 0);
-                refresh_display = true;
-            }
-            xSemaphoreGive(mutex);
-            // Wait for 5 minutes before the next request
-            vTaskDelay(pdMS_TO_TICKS(ALERTS_TIME_REFRESH_MS)); 
-        } else {
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        int semaphore_taken = xSemaphoreTake(mutex, 0);
+        while(semaphore_taken != pdTRUE) {
+            semaphore_taken = xSemaphoreTake(mutex, 0);
             vTaskDelay(pdMS_TO_TICKS(10));
         }
+        if (update_alerts()) {
+            // Reset the alert cycle timer so that we can see the new alert(s).
+            xTimerReset(alert_cycle_timer, 0);
+            xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+            
+            // Play the EAS tones.
+            xTaskNotifyGiveIndexed(eas_task_handle_1, 0);
+            xTaskNotifyGiveIndexed(eas_task_handle_2, 0);
+        }
+        xSemaphoreGive(mutex);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void get_time(void *arg) {
     while (true) {
-        refresh_display = update_time() && curr_state == STATE_CC;
-        // Wait for 60 seconds before the next request
-        vTaskDelay(pdMS_TO_TICKS(TIME_REFRESH_TIME_MS)); 
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        if (update_time() && curr_state == STATE_MAIN) {
+            xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -1226,18 +1566,20 @@ void check_error_bits(void *arg) {
 
 void check_and_update_display(void *arg) {
     while (true) {
-        if (refresh_display) {
-            if (curr_state == STATE_CC) {
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        if (curr_state == STATE_MAIN) {
+            if (main_state_list.curr_node->state == STATE_MAIN_CC) {
                 draw_cc_view();
-            } else if (curr_state == STATE_MENU) {
-                draw_menu_view();
-            } else if (curr_state == STATE_SI) {
-                draw_si_view();
+            } else {
+                draw_forecast_view();
             }
-            if (alert_list.curr_node != NULL) {
-                draw_curr_alert();  // We always want to show alerts on top of whatever screen we're on.
-            }
-            refresh_display = false;
+        } else if (curr_state == STATE_MENU) {
+            draw_menu_view();
+        } else if (curr_state == STATE_SI) {
+            draw_si_view();
+        }
+        if (alert_list.curr_node != NULL) {
+            draw_curr_alert();  // We always want to show alerts on top of whatever screen we're on.
         }
         
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -1247,9 +1589,12 @@ void check_and_update_display(void *arg) {
 void menu_btn_event(void *arg, void *usr_data) {
     if (curr_state == STATE_MENU) {
         update_menu(true, false, false);
-    } else if (curr_state == STATE_CC) {
+    } else if (curr_state == STATE_MAIN) {
         curr_state = STATE_MENU;
-        refresh_display = true;
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+    } else if (curr_state == STATE_SI) {
+        curr_state = STATE_MENU;
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
     }
 }
 
@@ -1267,42 +1612,78 @@ void menu_down_btn_event(void *arg, void *usr_data) {
 
 void play_eas_tone_buzzer_1(void *arg) {
     while (true) {
-        if (play_eas_tone) {
-            ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, BUZZER_DUTY);
-            ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            play_eas_tone = false;
-        }
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, BUZZER_DUTY);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void play_eas_tone_buzzer_2(void *arg) {
     while (true) {
-        if (play_eas_tone) {
-            ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2, BUZZER_DUTY);
-            ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            play_eas_tone = false;
-        }
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2, BUZZER_DUTY);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2);
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
+void cycle_alerts(void *arg) {
+    while (true) {
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        if (alert_list.root_node != NULL) {
+            alert_list.curr_node = alert_list.curr_node->next_node;
+            if (alert_list.curr_node == NULL) {
+                alert_list.curr_node = alert_list.root_node;
+            }
+            xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void cycle_main_states(void *arg) {
+    while (true) {
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        main_state_list.curr_node = main_state_list.curr_node->next_node;
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+}
+
 void alert_cycle_timer_callback(TimerHandle_t xTimer) {
-    if (alert_list.root_node == NULL) {
-        return;
-    }
-    alert_list.curr_node = alert_list.curr_node->next_node;
-    if (alert_list.curr_node == NULL) {
-        alert_list.curr_node = alert_list.root_node;
-    }
-    
-    refresh_display = true;
+    xTaskNotifyGiveIndexed(cycle_alert_task_handler, 0);
+}
+
+void main_view_cycle_timer_callback(TimerHandle_t xTimer) {
+    xTaskNotifyGiveIndexed(cycle_main_state_task_handle, 0);
+}
+
+void cc_refresh_timer_callback(TimerHandle_t xTimer) {
+    xTaskNotifyGiveIndexed(cc_task_handle, 0);
+}
+
+void forecast_refresh_timer_callback(TimerHandle_t xTimer) {
+    xTaskNotifyGiveIndexed(forecast_task_handle, 0);
+}
+
+void alert_refresh_timer_callback(TimerHandle_t xTimer) {
+    xTaskNotifyGiveIndexed(alert_task_handle, 0);
+}
+
+void time_refresh_timer_callback(TimerHandle_t xTimer) {
+    xTaskNotifyGiveIndexed(time_task_handle, 0);
 }
 
 //*********************************************************************************************************************
@@ -1492,6 +1873,18 @@ void init_fs() {
     }
 }
 
+void init_main_states() {
+    struct MainStateNode *cc_node = (struct MainStateNode*) calloc(1, sizeof(struct MainStateNode));
+    struct CurrentConditions cc = {0};
+    cc_node->cc = cc;
+    cc_node->forecasts_root_node = NULL;
+    cc_node->next_node = NULL;
+    cc_node->state = STATE_MAIN_CC;
+
+    main_state_list.root_node = cc_node;
+    main_state_list.curr_node = main_state_list.root_node;
+}
+
 //*********************************************************************************************************************
 
 void app_main(void) {
@@ -1536,21 +1929,77 @@ void app_main(void) {
     draw_string("Initializing file system ...", 0, 140, DGX_WHITE(dgx_rgb_to_16), 2);
     init_fs();
 
+    // Initialize the main states
+    draw_string("Initializing main states ...", 0, 170, DGX_WHITE(dgx_rgb_to_16), 2);
+    init_main_states();
+
     // Create mutex for HTTP response buffer.
     mutex = xSemaphoreCreateMutex();
 
-    // Create timer for cycling through alerts.
+    // Create tasks.
+    BaseType_t result;
+    if ((result = xTaskCreate(http_get_alerts, "http_get_alerts", 8192, NULL, 1, &alert_task_handle)) != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating http_get_alerts task.");
+    }
+    if ((result = xTaskCreate(http_get_curr_conditions, "http_get_curr_conditions", 8192, NULL, 2, &cc_task_handle)) 
+            != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating http_get_curr_conditions task.");
+    }
+    if ((result = xTaskCreate(http_get_forecast, "http_get_forecast", 8192, NULL, 3, &forecast_task_handle)) 
+            != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating http_get_forecast task.");
+    }
+    if ((result = xTaskCreate(cycle_alerts, "cycle_alerts", 4028, NULL, 4, 
+            &cycle_alert_task_handler)) != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating cycle_alerts task.");
+    }
+    if ((result = xTaskCreate(cycle_main_states, "cycle_main_states", 4028, NULL, 5, 
+            &cycle_main_state_task_handle)) != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating cycle_main_states task.");
+    }
+    if ((result = xTaskCreate(check_and_update_display, "check_and_update_display", 4028, NULL, 6, 
+            &refresh_display_task_handle)) != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating check_and_update_display task.");
+    }
+    if ((result = xTaskCreate(get_time, "get_time", 4028, NULL, 7, &time_task_handle)) != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating get_time task.");
+    }
+    if ((result = xTaskCreate(check_error_bits, "check_error_bits", 2048, NULL, 8, NULL)) != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating check_error_bits task.");
+    }
+    if ((result = xTaskCreate(play_eas_tone_buzzer_1, "play_eas_tone_buzzer_1", 1024, NULL, 9, &eas_task_handle_1)) 
+            != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating play_eas_tone_buzzer_1 task.");
+    }
+    if ((result = xTaskCreate(play_eas_tone_buzzer_2, "play_eas_tone_buzzer_2", 1024, NULL, 10, &eas_task_handle_2)) 
+            != pdPASS) {
+        ESP_LOGE(TAG_ERROR, "Error creating play_eas_tone_buzzer_2_task.");
+    }
+
+    // Trigger the initial data retrieval tasks
+    xTaskNotifyGiveIndexed(cc_task_handle, 0);
+    xTaskNotifyGiveIndexed(forecast_task_handle, 0);
+    xTaskNotifyGiveIndexed(alert_task_handle, 0);
+    xTaskNotifyGiveIndexed(time_task_handle, 0);
+
+    // Create timers.
     alert_cycle_timer = xTimerCreate("alert-cycle-timer", pdMS_TO_TICKS(ALERT_CYCLE_MS), pdTRUE, (void*) 0, 
         alert_cycle_timer_callback);
     xTimerStart(alert_cycle_timer, 0);
-
-    // Create tasks.
-    xTaskCreate(check_and_update_display, "check_and_update_display", 4028, NULL, 3, NULL);
-    xTaskCreate(check_error_bits, "check_error_bits", 2048, NULL, 4, NULL);
-    xTaskCreate(get_time, "get_time", 4028, NULL, 5, NULL);
-    xTaskCreate(http_get_alerts, "http_get_alerts", 8192, NULL, 7, NULL);
-    xTaskCreate(http_get_curr_conditions, "http_get_curr_conditions", 8192, NULL, 8, NULL);
-    xTaskCreate(http_get_forecast, "http_get_forecast", 8192, NULL, 9, NULL);
-    xTaskCreate(play_eas_tone_buzzer_1, "play_eas_tone_buzzer_1", 1024, NULL, 10, NULL);
-    xTaskCreate(play_eas_tone_buzzer_2, "play_eas_tone_buzzer_2", 1024, NULL, 11, NULL);
+    main_view_cycle_timer = xTimerCreate("main-view-cycle-timer", pdMS_TO_TICKS(MAIN_STATE_CYCLE_MS), pdTRUE, (void*) 1, 
+        main_view_cycle_timer_callback);
+    xTimerStart(main_view_cycle_timer, 0);
+    
+    cc_refresh_timer = xTimerCreate("cc-refresh-timer", pdMS_TO_TICKS(CURR_CONDITIONS_REFRESH_TIME_MS), pdTRUE, 
+        (void*) 2, cc_refresh_timer_callback);
+    xTimerStart(cc_refresh_timer, 0);
+    forecast_refresh_timer = xTimerCreate("forecast-refresh-timer", pdMS_TO_TICKS(FORECAST_REFRESH_TIME_MS), pdTRUE, 
+        (void*) 3, forecast_refresh_timer_callback);
+    xTimerStart(forecast_refresh_timer, 0);
+    alert_refresh_timer = xTimerCreate("alert-refresh-timer", pdMS_TO_TICKS(ALERTS_TIME_REFRESH_MS), pdTRUE, (void*) 4,
+        alert_refresh_timer_callback);
+    xTimerStart(alert_refresh_timer, 0);
+    time_refresh_timer = xTimerCreate("time-refresh-timer", pdMS_TO_TICKS(TIME_REFRESH_TIME_MS), pdTRUE, (void*) 5,
+        time_refresh_timer_callback);
+    xTimerStart(time_refresh_timer, 0);
 }

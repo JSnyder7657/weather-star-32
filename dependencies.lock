@@ -193,7 +193,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 6.1.0
+    version: 6.1.1
   jef-sure/dgx:
     component_hash: 64f27dc579a5b0f64bd857944d0918ecefba784b64b2c4d8ab98ecc16de42bdc
     dependencies:
