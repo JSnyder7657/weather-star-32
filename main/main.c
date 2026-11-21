@@ -378,8 +378,8 @@ void draw_alert(struct AlertNode *alert) {
     }
 
     // We don't need to clear the screen since we want the banner to display on top of anything on screen.
-    dgx_fill_rectangle(tft, 0, 0, tft->width, 30, color);
-    draw_string(alert->data, 0, 20, DGX_WHITE(dgx_rgb_to_16), 2);
+    dgx_fill_rectangle(tft, ALERT_RECT_X_POS, ALERT_RECT_Y_POS, tft->width, ALERT_RECT_H, color);
+    draw_string(alert->data, ALERT_TEXT_X_POS, ALERT_TEXT_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
 }
 
 void draw_date_time() {
@@ -462,8 +462,6 @@ void draw_condition_cloudy(int size, int x, int y, uint32_t scale) {
 void draw_condition_partly_cloudy(int size, int x, int y, uint32_t scale) {
     uint16_t *sun_bitmap = get_image_data_from_fs(FILE_SUN_BIN, ICON_IMG_SIZE);
     uint16_t *cloud_bitmap = get_image_data_from_fs(FILE_CLOUD_BIN, ICON_IMG_SIZE);
-    // draw_bitmap(sun_bitmap, 32, 70, 85, 3);
-    // draw_bitmap(cloud_bitmap, 32, 75, 85, 3);
     draw_bitmap(sun_bitmap, size, x, y, scale);
     draw_bitmap(cloud_bitmap, size, x + 5, y, scale);
     free(sun_bitmap);
@@ -478,14 +476,12 @@ void draw_condition_rain(int size, int x, int y, uint32_t scale) {
 
 void draw_condition_storm(int size, int x, int y, uint32_t scale) {
     uint16_t *storm_bitmap = get_image_data_from_fs(FILE_STORM_BIN, ICON_IMG_SIZE);
-    // draw_bitmap(storm_bitmap, 32, 70, 85, 3);
     draw_bitmap(storm_bitmap, size, x, y, scale);
     free(storm_bitmap);
 }
 
 void draw_condition_unknown(int size, int x, int y, uint32_t scale) {
     uint16_t *unknown_bitmap = get_image_data_from_fs(FILE_UNKNOWN_BIN, ICON_IMG_SIZE);
-    // draw_bitmap(unknown_bitmap, 32, 70, 85, 3);
     draw_bitmap(unknown_bitmap, size, x, y, scale);
     free(unknown_bitmap);
 }
@@ -531,6 +527,11 @@ bool add_test_alert(const char *event, const char *severity) {
     // Add the alert and reset the alert cycle timer so that we can see the new alert in full time.
     bool success = add_alert(event, date_time, severity);
     xTimerReset(alert_cycle_timer, 0);
+
+    // Play EAS attention tone.
+    xTaskNotifyGiveIndexed(eas_task_handle_1, 0);
+    xTaskNotifyGiveIndexed(eas_task_handle_2, 0);
+
     return success;
 }
 
@@ -1535,7 +1536,7 @@ void http_get_alerts(void *arg) {
             xTimerReset(alert_cycle_timer, 0);
             xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
             
-            // Play the EAS tones.
+            // Play EAS attention tone.
             xTaskNotifyGiveIndexed(eas_task_handle_1, 0);
             xTaskNotifyGiveIndexed(eas_task_handle_2, 0);
         }
@@ -1615,7 +1616,7 @@ void play_eas_tone_buzzer_1(void *arg) {
         ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, BUZZER_DUTY);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(EAS_TONE_DURATION_MS));
 
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
@@ -1629,7 +1630,7 @@ void play_eas_tone_buzzer_2(void *arg) {
         ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2, BUZZER_DUTY);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2);
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(EAS_TONE_DURATION_MS));
 
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_2);

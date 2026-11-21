@@ -164,6 +164,7 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define BUZZER_POWER_ON_FREQ  UINT16_C(1000)
 #define BUZZER_POWER_ON_DURATION_MS UINT16_C(250)
 #define EAS_TONE_DURATION_MS  UINT16_C(3000)
+#define BUZZER_DUTY UINT16_C(700)
 
 // UI constants
 #define CC_CONTAINER_COLOR  dgx_rgb_to_16(41, 54, 103)
@@ -241,6 +242,13 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define SI_MIN_FREE_HEAP_SIZE_Y_POS UINT8_C(90)
 #define SI_FONT_SCALE UINT8_C(2)
 
+#define ALERT_TEXT_X_POS  UINT8_C(10)
+#define ALERT_TEXT_Y_POS  UINT8_C(20)
+#define ALERT_RECT_X_POS  UINT8_C(0)
+#define ALERT_RECT_Y_POS  UINT8_C(0)
+#define ALERT_RECT_W  UINT8_C(320)
+#define ALERT_RECT_H UINT8_C(30)
+
 // Weather data constants
 #define DESC_BUFFER_SIZE  UINT8_C(255)
 #define DAY_BUFFER_SIZE UINT8_C(4)
@@ -261,9 +269,6 @@ const bool DEG_F = true;
 // Button constants;
 #define BTN_SHORT_PRESS_TIME_MS  UINT8_C(200)
 #define BTN_LONG_PRESS_TIME_MS  UINT16_C(5000)
-
-// Buzzer constants
-#define BUZZER_DUTY 700
 
 // Seven segment error code constants
 #define ERROR_NWS_API_GET UINT8_C(0x01)
