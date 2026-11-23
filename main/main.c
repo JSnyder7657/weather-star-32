@@ -213,6 +213,7 @@ void perform_menu_action() {
         xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
 	} else if (compare_strings(MENU_OPTION_CLEAR_ERROR_CODE, curr_menu_node->data, -1)) {
         error_bits = 0x00;
+        xTaskNotifyGiveIndexed(error_bits_task_handle, 0);
     } else if (compare_strings(MENU_OPTION_SYSTEM_INFO, curr_menu_node->data, -1)) {
         curr_state = STATE_SI;
         xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
@@ -231,6 +232,10 @@ void perform_menu_action() {
     } else if (compare_strings(MENU_OPTION_CLOUDY, curr_menu_node->data, -1)) {
         memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
         snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_CLOUDY);
+        exit_menu();
+    } else if (compare_strings(MENU_OPTION_FOG, curr_menu_node->data, -1)) {
+        memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
+        snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_FOG);
         exit_menu();
     } else if (compare_strings(MENU_OPTION_PARTLY_CLOUDY, curr_menu_node->data, -1)) {
         memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
@@ -336,6 +341,8 @@ void remove_forecast_main_states() {
         free(temp_node);
         temp_node = placeholder_node;
     }
+    main_state_list.root_node->next_node = NULL;
+    main_state_list.curr_node = main_state_list.root_node;
 }
 
 //*********************************************************************************************************************
@@ -367,11 +374,12 @@ void clear_ext_forecasts_list(struct ExtForecastNode *root_node) {
 //*********************************************************************************************************************
 
 void draw_header_rect() {
-    fill_rect_v_gradient(0, 10, 210, 40, DGX_COPPER(dgx_rgb_to_16), DGX_NAVY(dgx_rgb_to_16));
+    fill_rect_v_gradient(HEADER_RECT_X_POS, HEADER_RECT_Y_POS, HEADER_RECT_W, HEADER_RECT_H, 
+        DGX_COPPER(dgx_rgb_to_16), DGX_PURPLE(dgx_rgb_to_16));
 }
 
 void draw_header_string(const char *str) {
-    draw_string(str, 10, 35, DGX_YELLOW(dgx_rgb_to_16), 2);
+    draw_string(str, HEADER_TEXT_X_POS, HEADER_TEXT_Y_POS, DGX_YELLOW(dgx_rgb_to_16), 2);
 }
 
 void draw_string(const char *str, int16_t x, int16_t y, uint32_t color, int scale) {
@@ -577,6 +585,12 @@ void draw_logo_bitmap(int size, int x, int y, uint32_t scale) {
     free(image_data);
 }
 
+void draw_noaa_logo_bitmap(int size, int x, int y, uint32_t scale) {
+    uint16_t *image_data = get_image_data_from_fs(FILE_NOAA_BIN, ICON_IMG_SIZE);
+    draw_bitmap(image_data, size, x, y, scale);
+    free(image_data);
+}
+
 void draw_ext_forecast_condition_bitmap(const char *condition, uint8_t day) {
     int img_x_pos = day == 0 ? EF_DAY_1_IMG_X_POS : EF_DAY_2_IMG_X_POS;
 
@@ -598,19 +612,19 @@ void draw_ext_forecast_condition_bitmap(const char *condition, uint8_t day) {
 }
 
 void draw_condition_bitmap(const char *condition) {
-    if (string_contains(condition, CC_CLEAR, false) || 
-            string_contains(condition, JSON_SUNNY, false)) {
+    if (string_contains(condition, CC_CLEAR, false) || string_contains(condition, JSON_SUNNY, false)) {
         draw_condition_clear(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
     } else if (string_contains(condition, CC_PARTLY, false)) {
         draw_condition_partly_cloudy(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
     } else if (string_contains(condition, CC_CLOUDY, false)) {
         draw_condition_cloudy(CC_CONDITION_IMG_SIZE, 35, 85, CC_CONDITION_IMG_SCALE);
+    } else if (string_contains(condition, CC_FOG, false) || string_contains(condition, CC_HAZE, false)) {
+        draw_condition_fog(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
     } else if (string_contains(condition, CC_SNOW, false)) {
         draw_condition_snow(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
     } else if (string_contains(condition, CC_THUNDER, false)) {
         draw_condition_storm(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
-    } else if (string_contains(condition, CC_RAIN, false) || 
-            string_contains(condition, CC_SHOWERS, false)) {
+    } else if (string_contains(condition, CC_RAIN, false) || string_contains(condition, CC_SHOWERS, false)) {
         draw_condition_rain(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
     } else {
         draw_condition_unknown(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
@@ -628,6 +642,12 @@ void draw_condition_cloudy(int size, int x, int y, uint32_t scale) {
     draw_bitmap(bitmap, size, x, y, scale);
     draw_bitmap(bitmap, size, x + 30, y - 20, scale);
     draw_bitmap(bitmap, size, x + 60, y - 5, scale);
+    free(bitmap);
+}
+
+void draw_condition_fog(int size, int x, int y, uint32_t scale) {
+    uint16_t *bitmap = get_image_data_from_fs(FILE_FOG_BIN, ICON_IMG_SIZE);
+    draw_bitmap(bitmap, size, x, y, scale);
     free(bitmap);
 }
 
@@ -1571,6 +1591,9 @@ void draw_local_forecast_view() {
 
     // Draw the header text
     draw_header_string(HEADER_LOCAL_FORECAST);
+    
+    // Draw the NOAA logo. 
+    draw_noaa_logo_bitmap(CC_CONDITION_IMG_SIZE, NOAA_LOGO_IMG_X_POS, NOAA_LOGO_IMG_Y_POS, 1);
 
     // Write the date and time.
     draw_date_time();
@@ -1741,8 +1764,7 @@ void http_get_forecast(void *arg) {
             semaphore_taken = xSemaphoreTake(mutex, 0);
             vTaskDelay(pdMS_TO_TICKS(10));
         }
-        if (curr_day != prev_day && update_forecast() && curr_state == STATE_MAIN) {
-            prev_day = curr_day;
+        if (update_forecast() && curr_state == STATE_MAIN) {
             xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
         }
         xSemaphoreGive(mutex);
@@ -1784,11 +1806,9 @@ void get_time(void *arg) {
 
 void check_error_bits(void *arg) { 
     while (true) {
-        if (error_bits != prev_error_bits) {
-            prev_error_bits = error_bits;
-            update_seven_seg();
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        ulTaskNotifyTakeIndexed(0, pdTRUE, portMAX_DELAY);
+        update_seven_seg();
+        vTaskDelay(pdMS_TO_TICKS(10));
     }   
 }
 
@@ -1925,7 +1945,7 @@ void init_pins() {
         .pull_down_en = GPIO_PULLDOWN_DISABLE,  // Disable pull-down
         .intr_type = GPIO_INTR_DISABLE             // Disable interrupts
     };
-    gpio_config(&reg_oe_config);
+    ESP_ERROR_CHECK(gpio_config(&reg_oe_config));
 
     gpio_config_t reg_rclk_config = {
         .pin_bit_mask = (1ULL << PIN_REG_RCLK),
@@ -1934,7 +1954,7 @@ void init_pins() {
         .pull_down_en = GPIO_PULLDOWN_DISABLE,  // Disable pull-down
         .intr_type = GPIO_INTR_DISABLE             // Disable interrupts
     };
-    gpio_config(&reg_rclk_config);
+    ESP_ERROR_CHECK(gpio_config(&reg_rclk_config));
 
     gpio_config_t reg_ser_config = {
         .pin_bit_mask = (1ULL << PIN_REG_SER),
@@ -1943,7 +1963,7 @@ void init_pins() {
         .pull_down_en = GPIO_PULLDOWN_DISABLE,  // Disable pull-down
         .intr_type = GPIO_INTR_DISABLE             // Disable interrupts
     };
-    gpio_config(&reg_ser_config);
+    ESP_ERROR_CHECK(gpio_config(&reg_ser_config));
 
     ESP_ERROR_CHECK(shiftregister_gpio_init(&reg_config));
 
@@ -1955,7 +1975,7 @@ void init_pins() {
         .pull_down_en = GPIO_PULLDOWN_DISABLE,  // Disable pull-down
         .intr_type = GPIO_INTR_DISABLE             // Disable interrupts
     };
-    gpio_config(&inc_led_config);
+    ESP_ERROR_CHECK(gpio_config(&inc_led_config));
 
     // Buttons are configured differently than normal GPIO pins.
     menu_btn_config.long_press_time = BTN_LONG_PRESS_TIME_MS;
@@ -1964,7 +1984,7 @@ void init_pins() {
     menu_btn_gpio_config.active_level = BUTTON_INACTIVE;
     menu_btn_gpio_config.disable_pull = true;
     button_handle_t menu_btn;
-    esp_err_t ret_menu = iot_button_new_gpio_device(&menu_btn_config, &menu_btn_gpio_config, &menu_btn);
+    ESP_ERROR_CHECK(iot_button_new_gpio_device(&menu_btn_config, &menu_btn_gpio_config, &menu_btn));
 
     menu_up_btn_config.long_press_time = BTN_LONG_PRESS_TIME_MS;
     menu_up_btn_config.short_press_time = BTN_SHORT_PRESS_TIME_MS;
@@ -1973,7 +1993,7 @@ void init_pins() {
     menu_up_btn_gpio_config.disable_pull = true;
 
     button_handle_t menu_up_btn;
-    esp_err_t ret_menu_up = iot_button_new_gpio_device(&menu_up_btn_config, &menu_up_btn_gpio_config, &menu_up_btn);
+    ESP_ERROR_CHECK(iot_button_new_gpio_device(&menu_up_btn_config, &menu_up_btn_gpio_config, &menu_up_btn));
 
     menu_down_btn_config.long_press_time = BTN_LONG_PRESS_TIME_MS;
     menu_down_btn_config.short_press_time = BTN_SHORT_PRESS_TIME_MS;
@@ -1981,18 +2001,14 @@ void init_pins() {
     menu_down_btn_gpio_config.active_level = BUTTON_INACTIVE;
     menu_down_btn_gpio_config.disable_pull = true;
     button_handle_t menu_down_btn;
-    esp_err_t ret_menu_down = iot_button_new_gpio_device(&menu_down_btn_config, &menu_down_btn_gpio_config, 
-        &menu_down_btn);
+    ESP_ERROR_CHECK(iot_button_new_gpio_device(&menu_down_btn_config, &menu_down_btn_gpio_config, &menu_down_btn));
 
-    ret_menu = iot_button_register_cb(menu_btn, BUTTON_SINGLE_CLICK, NULL, menu_btn_event, NULL);
-    ESP_ERROR_CHECK(ret_menu);
-    ret_menu_up = iot_button_register_cb(menu_up_btn, BUTTON_SINGLE_CLICK, NULL, menu_up_btn_event, NULL);
-    ESP_ERROR_CHECK(ret_menu_up);
-    ret_menu_down = iot_button_register_cb(menu_down_btn, BUTTON_SINGLE_CLICK, NULL, menu_down_btn_event, NULL);
-    ESP_ERROR_CHECK(ret_menu_down);
+    ESP_ERROR_CHECK(iot_button_register_cb(menu_btn, BUTTON_SINGLE_CLICK, NULL, menu_btn_event, NULL));
+    ESP_ERROR_CHECK(iot_button_register_cb(menu_up_btn, BUTTON_SINGLE_CLICK, NULL, menu_up_btn_event, NULL));
+    ESP_ERROR_CHECK(iot_button_register_cb(menu_down_btn, BUTTON_SINGLE_CLICK, NULL, menu_down_btn_event, NULL));
 }
 
-void init_display() {
+bool init_display() {
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = (gpio_num_t) GPIO_NUM_23,  // replace with your wiring
         .sclk_io_num = (gpio_num_t) GPIO_NUM_18,
@@ -2004,24 +2020,35 @@ void init_display() {
     bus = dgx_spi_init_on_bus(SPI3_HOST, (gpio_num_t) GPIO_NUM_5, (gpio_num_t) GPIO_NUM_2, 40000000, 0);
     if (bus == NULL) {
         ESP_LOGE(TAG_ERROR, "dgx_spi_init failed.");
-        return;
+        return false;
     }
     tft = dgx_ili9341_init(bus, GPIO_NUM_4, 0, 16, DgxScreenRGB);
     if (tft == NULL) {
         ESP_LOGE(TAG_ERROR, "dgx_ili9341_init failed");
         bus->dispose(bus);
-        return;
+        return false;
     }
 
     dgx_ili9341_orientation(tft, DgxScreenLeftRight, DgxScreenBottomTop, true);
     
     clear_screen();
+
+    return true;
 }
 
-void init_menu() {
+bool init_menu() {
     // Parse the JSON string and create the menu nodes from it.
     cJSON *json = cJSON_Parse(MENU_JSON_STR);
+    if (json == NULL) {
+        ESP_LOGE(TAG_ERROR, "cJSON_Parse() was NULL.");
+        return false;    
+    }
+
     json = json->child;
+    if (json == NULL) {
+        ESP_LOGE(TAG_ERROR, "json->child was NULL.");
+        return false;    
+    }
     ESP_LOGI(TAG_INFO, "Successfully parsed menu JSON.");
 
     root_menu_node = create_menu_nodes(json, NULL, false);
@@ -2031,6 +2058,8 @@ void init_menu() {
 	curr_section_lead_node = curr_parent_node->first_child;
 	curr_menu_node = curr_section_lead_node;
 	curr_menu_pos = 0;
+
+    return true;
 }
 
 void init_http_client_config() {
@@ -2054,8 +2083,8 @@ void init_buzzers() {
         .timer_sel = LEDC_TIMER_0,
         .duty = 0
     };
-    ledc_timer_config(&buzzer_1_config);
-    ledc_channel_config(&buzzer_1_channel);
+    ESP_ERROR_CHECK(ledc_timer_config(&buzzer_1_config));
+    ESP_ERROR_CHECK(ledc_channel_config(&buzzer_1_channel));
 
     // Buzzer 2
     ledc_timer_config_t buzzer_2_config = {
@@ -2071,13 +2100,12 @@ void init_buzzers() {
         .timer_sel = LEDC_TIMER_1,
         .duty = 0
     };
-    ledc_timer_config(&buzzer_2_config);
-    ledc_channel_config(&buzzer_2_channel);
+    ESP_ERROR_CHECK(ledc_timer_config(&buzzer_2_config));
+    ESP_ERROR_CHECK(ledc_channel_config(&buzzer_2_channel));
 }
 
 void init_clock() {
-    esp_sntp_config_t config =
-    ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
 
     ESP_ERROR_CHECK(esp_netif_sntp_init(&config));
     if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) != ESP_OK) {
@@ -2095,10 +2123,7 @@ void init_fs() {
     conf.format_if_mount_failed = true;
     conf.dont_mount = false;
 
-    esp_err_t ret = esp_vfs_littlefs_register(&conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG_ERROR, "Error initializing file system: %s", esp_err_to_name(ret));
-    }
+    ESP_ERROR_CHECK(esp_vfs_littlefs_register(&conf));
 }
 
 void init_main_states() {
@@ -2115,6 +2140,11 @@ void init_main_states() {
 
 //*********************************************************************************************************************
 
+void handle_init_error(const char *error_msg) {
+    ESP_LOGE(TAG_ERROR, "%s", error_msg);
+    esp_restart();
+}
+
 void app_main(void) {
     // Initialize GPIO pins
     init_pins();
@@ -2123,7 +2153,9 @@ void app_main(void) {
     init_buzzers();
 
     // Create and initialize the display bus
-    init_display();
+    if (!init_display()) {
+        handle_init_error("Failed to initialize display.");
+    }
 
     // Draw the footer string.
     draw_string(FOOTER_WS32, 240, 220, DGX_YELLOW(dgx_rgb_to_16), 1);
@@ -2151,7 +2183,9 @@ void app_main(void) {
 
     // Initialize the menu nodes
     draw_string("Initializing menu ...", 0, 110, DGX_WHITE(dgx_rgb_to_16), 2);
-    init_menu();
+    if (!init_menu()) {
+        handle_init_error("Error initializing menu.");
+    }
 
     // Initialize the file system
     draw_string("Initializing file system ...", 0, 140, DGX_WHITE(dgx_rgb_to_16), 2);
@@ -2167,41 +2201,41 @@ void app_main(void) {
     // Create tasks.
     BaseType_t result;
     if ((result = xTaskCreate(http_get_alerts, "http_get_alerts", 8192, NULL, 1, &alert_task_handle)) != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating http_get_alerts task.");
+        handle_init_error("Error creating http_get_alerts task.");
     }
     if ((result = xTaskCreate(http_get_curr_conditions, "http_get_curr_conditions", 8192, NULL, 2, &cc_task_handle)) 
             != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating http_get_curr_conditions task.");
+        handle_init_error("Error creating http_get_curr_conditions task.");
     }
     if ((result = xTaskCreate(http_get_forecast, "http_get_forecast", 8192, NULL, 3, &forecast_task_handle)) 
             != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating http_get_forecast task.");
+        handle_init_error("Error creating http_get_forecast task.");
     }
     if ((result = xTaskCreate(cycle_alerts, "cycle_alerts", 4028, NULL, 4, 
             &cycle_alert_task_handler)) != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating cycle_alerts task.");
+        handle_init_error("Error creating cycle_alerts task.");
     }
     if ((result = xTaskCreate(cycle_main_states, "cycle_main_states", 4028, NULL, 5, 
             &cycle_main_state_task_handle)) != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating cycle_main_states task.");
+        handle_init_error("Error creating cycle_main_states task.");
     }
     if ((result = xTaskCreate(check_and_update_display, "check_and_update_display", 8192, NULL, 6, 
             &refresh_display_task_handle)) != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating check_and_update_display task.");
+        handle_init_error("Error creating check_and_update_display task.");
     }
     if ((result = xTaskCreate(get_time, "get_time", 4028, NULL, 7, &time_task_handle)) != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating get_time task.");
+        handle_init_error("Error creating get_time task.");
     }
-    if ((result = xTaskCreate(check_error_bits, "check_error_bits", 2048, NULL, 8, NULL)) != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating check_error_bits task.");
+    if ((result = xTaskCreate(check_error_bits, "check_error_bits", 2048, NULL, 8, &error_bits_task_handle)) != pdPASS) {
+        handle_init_error("Error creating check_error_bits task.");
     }
     if ((result = xTaskCreate(play_eas_tone_buzzer_1, "play_eas_tone_buzzer_1", 1024, NULL, 9, &eas_task_handle_1)) 
             != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating play_eas_tone_buzzer_1 task.");
+        handle_init_error("Error creating play_eas_tone_buzzer_1 task.");
     }
     if ((result = xTaskCreate(play_eas_tone_buzzer_2, "play_eas_tone_buzzer_2", 1024, NULL, 10, &eas_task_handle_2)) 
             != pdPASS) {
-        ESP_LOGE(TAG_ERROR, "Error creating play_eas_tone_buzzer_2_task.");
+        handle_init_error("Error creating play_eas_tone_buzzer_2_task.");
     }
 
     // Trigger the initial data retrieval tasks
@@ -2215,21 +2249,44 @@ void app_main(void) {
     // Create timers.
     alert_cycle_timer = xTimerCreate("alert-cycle-timer", pdMS_TO_TICKS(ALERT_CYCLE_MS), pdTRUE, (void*) 0, 
         alert_cycle_timer_callback);
-    xTimerStart(alert_cycle_timer, 0);
+    if (alert_cycle_timer == NULL) {
+        handle_init_error("Error creating alert-cycle-timer timer.");
+    } else {
+        xTimerStart(alert_cycle_timer, 0);
+    }
     main_view_cycle_timer = xTimerCreate("main-view-cycle-timer", pdMS_TO_TICKS(MAIN_STATE_CYCLE_MS), pdTRUE, (void*) 1, 
         main_view_cycle_timer_callback);
-    xTimerStart(main_view_cycle_timer, 0);
-    
+    if (main_view_cycle_timer == NULL) {
+        handle_init_error("Error creating main_view-cycle-timer timer.");
+    } else {
+        xTimerStart(main_view_cycle_timer, 0);
+    }
     cc_refresh_timer = xTimerCreate("cc-refresh-timer", pdMS_TO_TICKS(CURR_CONDITIONS_REFRESH_TIME_MS), pdTRUE, 
         (void*) 2, cc_refresh_timer_callback);
-    xTimerStart(cc_refresh_timer, 0);
+    if (cc_refresh_timer == NULL) {
+        handle_init_error("Error creating cc-refresh-timer timer.");    
+    } else {
+        xTimerStart(cc_refresh_timer, 0);
+    }
     forecast_refresh_timer = xTimerCreate("forecast-refresh-timer", pdMS_TO_TICKS(FORECAST_REFRESH_TIME_MS), pdTRUE, 
         (void*) 3, forecast_refresh_timer_callback);
-    xTimerStart(forecast_refresh_timer, 0);
+    if (forecast_refresh_timer == NULL) {
+        handle_init_error("Error creating forecast-refresh-timer timer.");
+    } else {
+        xTimerStart(forecast_refresh_timer, 0);
+    }
     alert_refresh_timer = xTimerCreate("alert-refresh-timer", pdMS_TO_TICKS(ALERTS_TIME_REFRESH_MS), pdTRUE, (void*) 4,
         alert_refresh_timer_callback);
-    xTimerStart(alert_refresh_timer, 0);
+    if (alert_refresh_timer == NULL) {
+        handle_init_error("Error creating alert-refresh-timer timer.");
+    } else {
+        xTimerStart(alert_refresh_timer, 0);
+    }
     time_refresh_timer = xTimerCreate("time-refresh-timer", pdMS_TO_TICKS(TIME_REFRESH_TIME_MS), pdTRUE, (void*) 5,
         time_refresh_timer_callback);
-    xTimerStart(time_refresh_timer, 0);
+    if (time_refresh_timer == NULL) {
+        handle_init_error("Error creating time-refresh-timer timer.");
+    } else {
+        xTimerStart(time_refresh_timer, 0);
+    }
 }

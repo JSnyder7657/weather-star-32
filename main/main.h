@@ -69,6 +69,7 @@
 #define MENU_OPTION_SYSTEM_INFO  "View System Info"
 #define MENU_OPTION_CLEAR "Clear"
 #define MENU_OPTION_CLOUDY  "Cloudy"
+#define MENU_OPTION_FOG "Fog"
 #define MENU_OPTION_PARTLY_CLOUDY "Partly Cloudy"
 #define MENU_OPTION_SCATTERED_SHOWERS "Scattered Showers"
 #define MENU_OPTION_SNOW  "Snow"
@@ -98,6 +99,8 @@
 #define CC_SHOWERS  "Showers"
 #define CC_SNOW "Snow"
 #define CC_THUNDER  "Thunder"
+#define CC_FOG  "Fog"
+#define CC_HAZE "Haze"
 #define WIND_DIR_N  "N "
 #define WIND_DIR_NW "NW"
 #define WIND_DIR_W  "W "
@@ -123,6 +126,8 @@
 #define FILE_SNOW_BIN "snow.bin"
 #define FILE_MOON_BIN "moon.bin"
 #define FILE_UNKNOWN_BIN  "unknown.bin"
+#define FILE_NOAA_BIN "noaa.bin"
+#define FILE_FOG_BIN  "fog.bin"
 
 #define LOGO_IMG_SIZE UINT16_C(32768)
 #define ICON_IMG_SIZE UINT16_C(1024)
@@ -161,7 +166,7 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define MAX_EF_COUNT  UINT8_C(7)
 
 // Menu constants
-#define MENU_JSON_STR "{\"Menu\":{\"Back\":0,\"Settings\":{\"Back\":0},\"Tests\":{\"Back\":0,\"EAS\":[\"Back\",\"Blizzard Watch\",\"Blizzard Warning\",\"Severe T'storm Watch\",\"Severe T'storm Warning\",\"Tornado Watch\",\"Tornado Warning\"],\"Current Conditions\":[\"Back\",\"Clear\",\"Cloudy\",\"Partly Cloudy\",\"Scattered Showers\",\"Snow\",\"Thunderstorm\"],\"Wrapped Text\":0},\"View System Info\":0,\"Clear Error Code\":0,\"Update Forecasts\":0,\"Update Current Conditions\":0}}"
+#define MENU_JSON_STR "{\"Menu\":{\"Back\":0,\"Settings\":{\"Back\":0},\"Tests\":{\"Back\":0,\"EAS\":[\"Back\",\"Blizzard Watch\",\"Blizzard Warning\",\"Severe T'storm Watch\",\"Severe T'storm Warning\",\"Tornado Watch\",\"Tornado Warning\"],\"Current Conditions\":[\"Back\",\"Clear\",\"Cloudy\",\"Fog\",\"Partly Cloudy\",\"Scattered Showers\",\"Snow\",\"Thunderstorm\"],\"Wrapped Text\":0},\"View System Info\":0,\"Clear Error Code\":0,\"Update Forecasts\":0,\"Update Current Conditions\":0}}"
 #define MENU_NODE_DATA_BUFFER_SIZE  UINT8_C(50)
 #define MENU_OPTION_BUFFER_SIZE UINT8_C(50)
 #define MENU_OPTIONS_X  INT16_C(5)
@@ -183,6 +188,13 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define CC_CONTAINER_COLOR  dgx_rgb_to_16(41, 54, 103)
 #define TEXT_SIZE   UINT8_C(2)
 #define SHADOW_OFFSET UINT8_C(3)
+
+#define HEADER_RECT_X_POS UINT8_C(0)
+#define HEADER_RECT_Y_POS UINT8_C(10)
+#define HEADER_RECT_W UINT8_C(210)
+#define HEADER_RECT_H UINT8_C(40)
+#define HEADER_TEXT_X_POS UINT8_C(10)
+#define HEADER_TEXT_Y_POS UINT8_C(35)
 
 #define DATE_X_POS UINT8_C(220)
 #define DATE_Y_POS  UINT8_C(25)
@@ -269,6 +281,9 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define LF_TEXT_X_POS UINT8_C(10)
 #define LF_TEXT_Y_POS UINT8_C(65)
 #define LF_TEXT_FONT_SCALE  UINT8_C(2)
+
+#define NOAA_LOGO_IMG_X_POS UINT8_C(150)
+#define NOAA_LOGO_IMG_Y_POS UINT8_C(12)
 
 #define WRAPPED_TEXT_ROW_OFFEST INT16_C(15)
 #define WRAPPED_TEXT_MAX_NUM_ROWS INT8_C(10)
@@ -415,7 +430,8 @@ SemaphoreHandle_t mutex;
 
 // Task handles
 TaskHandle_t forecast_task_handle, cc_task_handle, alert_task_handle, cycle_alert_task_handler, 
-    cycle_main_state_task_handle, refresh_display_task_handle, time_task_handle, eas_task_handle_1, eas_task_handle_2;
+    cycle_main_state_task_handle, refresh_display_task_handle, time_task_handle, eas_task_handle_1, eas_task_handle_2,
+    error_bits_task_handle;
 
 // Timers
 TimerHandle_t alert_cycle_timer, main_view_cycle_timer, cc_refresh_timer, forecast_refresh_timer, alert_refresh_timer,
@@ -423,9 +439,6 @@ TimerHandle_t alert_cycle_timer, main_view_cycle_timer, cc_refresh_timer, foreca
 
 // File system
 esp_vfs_littlefs_conf_t conf;
-
-// Buzzers
-bool play_eas_tone = false;
 
 // Function prototypes
 //*********************************************************************************************************************
@@ -492,11 +505,13 @@ void draw_low_arrow_bitmap(int size, int x, int y, uint32_t scale);
 void draw_high_arrow_bitmap(int size, int x, int y, uint32_t scale);
 void draw_dew_point_bitmap(int size, int x, int y, uint32_t scale);
 void draw_logo_bitmap(int size, int x, int y, uint32_t scale);
+void draw_noaa_logo_bitmap(int size, int x, int y, uint32_t scale);
 void draw_ext_forecast_condition_bitmap(const char *condition, uint8_t day);
 void draw_condition_bitmap(const char *condition);
 
 void draw_condition_clear(int size, int x, int y, uint32_t scale);
 void draw_condition_cloudy(int size, int x, int y, uint32_t scale);
+void draw_condition_fog(int size, int x, int y, uint32_t scale);
 void draw_condition_partly_cloudy(int size, int x, int y, uint32_t scale);
 void draw_condition_rain(int size, int x, int y, uint32_t scale);
 void draw_condition_snow(int size, int x, int y, uint32_t scale);
@@ -571,12 +586,14 @@ void time_refresh_timer_callback(TimerHandle_t xTimer);
 //*********************************************************************************************************************
 
 void init_pins();
-void init_display();
-void init_menu();
+bool init_display();
+bool init_menu();
 void init_http_client_config();
 void init_buzzers();
 void init_clock();
 void init_fs();
 void init_main_states();
+
+void handle_init_error(const char *error_msg);
 
 #endif

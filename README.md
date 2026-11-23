@@ -68,6 +68,7 @@ HTTP from the National Weather Service's public API, which is linked in <a href=
 <a id="acknowledgements"></a>
 ## Acknowledgements
 * The NOAA and National Weather Service's public API, which can be found [here](https://api.weather.gov/).
+* [jef-sure](https://github.com/jef-sure) for [esp32-component-dgx](https://github.com/jef-sure/esp32-component-dgx) for display functions.
 
 <!-- LICENSE -->
 ## License
