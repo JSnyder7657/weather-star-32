@@ -80,6 +80,6 @@ Distributed under the Unlicense License. See `LICENSE.txt` for more information.
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
 [stars-shield]: https://img.shields.io/github/stars/othneildrew/Best-README-Template.svg?style=for-the-badge
-[stars-url]: https://github.com/jsnyder17/weather-star-32/stargazers
+[stars-url]: https://github.com/JSnyder7657/weather-star-32/stargazers
 [issues-shield]: https://img.shields.io/github/issues/othneildrew/Best-README-Template.svg?style=for-the-badge
-[issues-url]: https://github.com/jsnyder17/weather-star-32/issues
+[issues-url]: https://github.com/JSnyder7657/weather-star-32/issues
