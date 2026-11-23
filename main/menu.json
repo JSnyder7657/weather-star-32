@@ -26,8 +26,10 @@
                 "Cloudy",
                 "Partly Cloudy",
                 "Scattered Showers",
+                "Snow",
                 "Thunderstorm"
-            ]
+            ],
+            "Wrapped Text": 0
         },
         "View System Info": 0,
         "Clear Error Code": 0,

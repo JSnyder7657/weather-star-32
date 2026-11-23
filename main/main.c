@@ -57,7 +57,7 @@ void fill_rect_v_gradient(int16_t x, int16_t y, int w, int h, uint32_t color_1, 
 
 //*********************************************************************************************************************
 
-void add_image_to_fs(const uint16_t *image_data, const char *file_name, int size) {
+void add_image_to_fs(const uint16_t *image_data, const char *file_name, unsigned int size) {
         ESP_LOGI(TAG_INFO, "Opening file %s", file_name);
         
         char path_buffer[FILE_PATH_BUFFER_SIZE];
@@ -105,7 +105,7 @@ char* string_to_lower(const char *str) {
 	char *lower_str = (char*) malloc(len);
 	memset(lower_str, 0, len);
 
-	int i;
+	unsigned int i;
 	for (i = 0; i < len; i++) {
 		lower_str[i] = tolower(str[i]);
 	}
@@ -158,6 +158,12 @@ time_t get_utc_time_t_from_str(const char *datetime_str, const char *format) {
     struct tm tm;
     strptime(datetime_str, format, &tm);
     return mktime(&tm);
+}
+
+//*********************************************************************************************************************
+
+int divide_round_up(int a, int b) {
+    return (a / b) + (a % b != 0);
 }
 
 //*********************************************************************************************************************
@@ -230,6 +236,10 @@ void perform_menu_action() {
         memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
         snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_PARTLY_CLOUDY);
         exit_menu();
+    } else if (compare_strings(MENU_OPTION_SNOW, curr_menu_node->data, -1)) {
+        memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
+        snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_SNOW);
+        exit_menu();
     } else if (compare_strings(MENU_OPTION_SCATTERED_SHOWERS, curr_menu_node->data, -1)) {
         memset(main_state_list.root_node->cc.desc, 0, DESC_BUFFER_SIZE);
         snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", MENU_OPTION_SCATTERED_SHOWERS);
@@ -244,6 +254,9 @@ void perform_menu_action() {
     } else if (compare_strings(MENU_OPTION_TORNADO_WATCH, curr_menu_node->data, -1)) {
         add_test_alert(MENU_OPTION_TORNADO_WATCH, JSON_MODERATE);
         exit_menu();
+    } else if (compare_strings(MENU_OPTION_WRAPPED_TEXT, curr_menu_node->data, -1)) {
+        curr_state = STATE_WRAPPED_TEXT;
+        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
     }
 }
 
@@ -296,11 +309,12 @@ esp_err_t http_event_handler(esp_http_client_event_t *evt) {
 
 //*********************************************************************************************************************
 
-void add_main_state(const uint8_t state, struct ForecastNode *forecasts_root_node) {
+void add_main_state(const uint8_t state, const char *local_forecast, struct ExtForecastNode *ext_forecasts_root_node) {
     struct MainStateNode *new_node = (struct MainStateNode *) calloc(1, sizeof(struct MainStateNode));
     new_node->state = state;
-    new_node->forecasts_root_node = forecasts_root_node;
-
+    new_node->ext_forecasts_root_node = ext_forecasts_root_node;
+    snprintf(new_node->local_forecast, LOCAL_FORECAST_BUFFER_SIZE, "%s", local_forecast);
+    
     if (main_state_list.root_node->next_node == NULL) {
         main_state_list.root_node->next_node = new_node;
     } else {
@@ -318,7 +332,7 @@ void remove_forecast_main_states() {
     struct MainStateNode *placeholder_node;
     while (temp_node != main_state_list.root_node && temp_node != NULL) {
         placeholder_node = temp_node->next_node;
-        clear_forecasts_list(temp_node->forecasts_root_node);
+        clear_ext_forecasts_list(temp_node->ext_forecasts_root_node);
         free(temp_node);
         temp_node = placeholder_node;
     }
@@ -326,9 +340,9 @@ void remove_forecast_main_states() {
 
 //*********************************************************************************************************************
 
-struct ForecastNode* create_forecast_node(const char *desc, const char *day, uint8_t high_temp, uint8_t low_temp,
+struct ExtForecastNode* create_ext_forecast_node(const char *desc, const char *day, uint8_t high_temp, uint8_t low_temp,
         const char *start_time_str, const char *end_time_str) {
-    struct ForecastNode *new_node = (struct ForecastNode*) calloc(1, sizeof(struct ForecastNode));
+    struct ExtForecastNode *new_node = (struct ExtForecastNode*) calloc(1, sizeof(struct ExtForecastNode));
     memset(new_node->desc, 0, DESC_BUFFER_SIZE);
     snprintf(new_node->desc, DESC_BUFFER_SIZE, "%s", desc);
     snprintf(new_node->day, DAY_BUFFER_SIZE, "%s", day);
@@ -340,9 +354,9 @@ struct ForecastNode* create_forecast_node(const char *desc, const char *day, uin
     return new_node;
 }
 
-void clear_forecasts_list(struct ForecastNode *root_node) {
-    struct ForecastNode *temp_node = root_node;
-    struct ForecastNode *placeholder_node;
+void clear_ext_forecasts_list(struct ExtForecastNode *root_node) {
+    struct ExtForecastNode *temp_node = root_node;
+    struct ExtForecastNode *placeholder_node;
     while (temp_node != NULL) {
         placeholder_node = temp_node->next_node;
         free(temp_node);
@@ -364,6 +378,116 @@ void draw_string(const char *str, int16_t x, int16_t y, uint32_t color, int scal
     dgx_font_string_utf8_screen(tft, x + SHADOW_OFFSET, y + SHADOW_OFFSET, str, DGX_BLACK(dgx_rgb_to_16), 
         DgxOutputNormal, scale, DroidSansRegular9(), NULL, NULL);
     dgx_font_string_utf8_screen(tft, x, y, str, color, DgxOutputNormal, scale, DroidSansRegular9(), NULL, NULL);
+}
+
+void draw_string_wrapped(const char *str, int16_t x, int16_t y, uint32_t color, int scale, int16_t bound_width, 
+        int16_t bound_height) {
+    size_t str_len;            
+    if (str == NULL || (str_len = strlen(str)) < 1) {
+        ESP_LOGI(TAG_INFO, "Did not write wrapped string since str was NULL or empty.");
+        return;
+    }            
+
+    // Calculate the text width, text height, and top offset in pixels.
+    int16_t top_offset, text_height;
+    int text_width = dgx_font_string_bounds(str, DroidSansRegular9(), &top_offset, &text_height) * scale;
+    top_offset *= scale;
+    text_height *= scale;
+    int row_advance = WRAPPED_TEXT_ROW_OFFEST * scale;
+
+    // If the text width is less than or equal to the bound width, we can just draw the string normally.
+    if (text_width <= bound_width) {
+        draw_string(str, x, y - top_offset + row_advance, color, scale);
+    } else {
+        // Allocate heap space for the rows.
+        char **row_contents = (char**) malloc((WRAPPED_TEXT_MAX_NUM_ROWS * sizeof(char *)));
+        for (int i = 0; i < WRAPPED_TEXT_MAX_NUM_ROWS; i++) {
+            row_contents[i] = (char *) malloc(WRAPPED_TEXT_TEMP_BUFFER_SIZE * sizeof(char));
+        }
+
+        char row_buffer[WRAPPED_TEXT_TEMP_BUFFER_SIZE] = {0};
+        const char *p = str;
+        size_t row_len = 0;
+        int num_rows = 0;
+        while (*p) {
+            // Get the next word in the string.
+            while (*p == ' ') p++;  // Advance p past any spaces at the current position. *p means "the character/byte that p poitns to."
+            if (*p == '\0') break;  // If p now points to '\0'—the string’s end—there’s no word left, so stop.
+            
+            const char *word = p;  // Remember where the word starts. word points into the original string; it doesn’t copy the word.
+            while (*p != '\0' && *p != ' ') p++;  // Advance p until it reaches a space or the end of the string. Now p points just past the word.
+            size_t word_bytes = (size_t) (p - word);  // Subtract the starting address from the ending address to get the word's length in bytes.
+
+            // If the word is too large for the buffer, just break and don't render it.
+            if (word_bytes + 1 > sizeof(row_buffer)) {
+                break;
+            }
+
+            size_t separator_bytes = (row_len > 0) ? 1 : 0;
+            size_t needed = row_len + separator_bytes + word_bytes + 1;
+            if (needed > sizeof row_buffer && row_len > 0) {
+                if (num_rows >= WRAPPED_TEXT_MAX_NUM_ROWS) {
+                    break;  // If there's too many rows, just stop.
+                }
+                memcpy(row_contents[num_rows++], row_buffer, row_len + 1);
+                memset(row_buffer, 0, WRAPPED_TEXT_TEMP_BUFFER_SIZE);
+                separator_bytes = 0;
+                row_len = 0;
+            }
+
+            // Keep track of the previous length.
+            size_t old_len = row_len;
+
+            // Add the separator to the buffer if necessary before adding the word.
+            if (separator_bytes) {
+                row_buffer[row_len++] = ' ';
+            }
+            memcpy(row_buffer + row_len, word, word_bytes);
+            row_len += word_bytes;
+            row_buffer[row_len] = '\0';
+
+            // Calculate the width the text will be rendered at. Check if the row will fit. If it doesn't, then remove 
+            // the word we just added and put it on a new row instead.
+            int16_t unused_top, unused_height;
+            int candidate_width = dgx_font_string_bounds(row_buffer, DroidSansRegular9(), &unused_top, &unused_height) 
+                * scale;
+            if (candidate_width > bound_width && old_len > 0) {
+                // Add row without the new word.
+                row_buffer[old_len] = '\0';
+                row_len = old_len;
+                memcpy(row_contents[num_rows++], row_buffer, row_len + 1);
+
+                // Start a new row with the new word.
+                memset(row_buffer, 0, WRAPPED_TEXT_TEMP_BUFFER_SIZE);
+                memcpy(row_buffer, word, word_bytes);
+                row_len = word_bytes;
+                row_buffer[row_len] = '\0';
+            }
+        }
+        if (row_len > 0 && num_rows < WRAPPED_TEXT_MAX_NUM_ROWS) {  // Save the last non-empty row.
+            memcpy(row_contents[num_rows++], row_buffer, row_len + 1);
+        }
+
+        // If the bound_height is defined, check if the text will fit within the height according to the scale.
+        // If it doesn't, then we'll need to force the scale down until it does.
+        int total_height = text_height + row_advance * (num_rows - 1);
+        if (bound_height != -1 && scale > 1 && ((total_height) > bound_height)) {
+            // Free heap space.
+            for (int i = 0; i < WRAPPED_TEXT_MAX_NUM_ROWS; i++) {
+                free(row_contents[i]);
+            }
+            draw_string_wrapped(str, x, y, color, scale - 1, bound_width, bound_height);
+        } else {
+            // Finally, write each row to the screen.
+            for (int i = 0; i < num_rows; i++) {
+                draw_string(row_contents[i], x, y - top_offset + row_advance * i, color, scale);
+            }
+            // Free heap space.
+            for (int i = 0; i < WRAPPED_TEXT_MAX_NUM_ROWS; i++) {
+                free(row_contents[i]);
+            }
+        }
+    }
 }
 
 void draw_alert(struct AlertNode *alert) {
@@ -392,15 +516,39 @@ void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale)
         return;
     }
 
-    uint8_t image_be[size * size * 2];
-
-    for (int i = 0; i < size * size; ++i) {
+    // Calculate the base image by converting it to a high-byte first order.
+    int total_size = size * size;
+    uint8_t image_be[total_size * 2];
+    int i;
+    for (i = 0; i < total_size; ++i) {
         uint16_t pixel = bitmap[i];
         image_be[2 * i] = pixel >> 8;
         image_be[2 * i + 1] = pixel & 0xFF;
     }
 
-    dgx_screen_t *image = dgx_vscreen_from_array(image_be, size, size, 16, DgxScreenRGB);
+    // Calculate the shadow image.
+    uint8_t shadow_image[sizeof(image_be)];
+    memcpy(shadow_image, image_be, sizeof(image_be));
+
+    uint16_t repl = SHADOW_IMG_REPLACEMENT_COLOR;
+    uint8_t repl_high = (repl >> 8) & 0xFF;
+    uint8_t repl_low = repl & 0xFF;
+    int byte_index;
+    for (i = 0; i < total_size; ++i) {
+        byte_index = 2 * i;
+        if (image_be[byte_index] != 0x00 || image_be[byte_index + 1] != 0x00) {
+            shadow_image[byte_index] = repl_high;
+            shadow_image[byte_index + 1] = repl_low;
+        }
+    }
+
+    // Draw both images.
+    dgx_screen_t *image = dgx_vscreen_from_array(shadow_image, size, size, 16, DgxScreenRGB);
+    dgx_vscreen_to_screen(tft, x + SHADOW_OFFSET, y + SHADOW_OFFSET, image, 
+        DGX_VSCREEN_SCALE(scale) | DGX_VSCREEN_TRANSPARENT);
+    free(image);
+
+    image = dgx_vscreen_from_array(image_be, size, size, 16, DgxScreenRGB);
     dgx_vscreen_to_screen(tft, x, y, image, DGX_VSCREEN_SCALE(scale) | DGX_VSCREEN_TRANSPARENT);
     free(image);
 }
@@ -429,24 +577,48 @@ void draw_logo_bitmap(int size, int x, int y, uint32_t scale) {
     free(image_data);
 }
 
-void draw_condition_bitmap(const char *condition, int size, int x, int y, uint32_t scale) {
+void draw_ext_forecast_condition_bitmap(const char *condition, uint8_t day) {
+    int img_x_pos = day == 0 ? EF_DAY_1_IMG_X_POS : EF_DAY_2_IMG_X_POS;
+
     if (string_contains(condition, CC_CLEAR, false) || string_contains(condition, JSON_SUNNY, false)) {
-        draw_condition_clear(size, x, y, scale);
+        draw_condition_clear(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
     } else if (string_contains(condition, CC_PARTLY, false)) {
-        draw_condition_partly_cloudy(size, x, y, scale);
+        draw_condition_partly_cloudy(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
     } else if (string_contains(condition, CC_CLOUDY, false)) {
-        draw_condition_cloudy(size, x, y, scale);
+        draw_condition_cloudy(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
+    } else if (string_contains(condition, CC_SNOW, false)) {
+        draw_condition_snow(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
     } else if (string_contains(condition, CC_THUNDER, false)) {
-        draw_condition_storm(size, x, y, scale);
+        draw_condition_storm(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
     } else if (string_contains(condition, CC_RAIN, false) || string_contains(condition, CC_SHOWERS, false)) {
-        draw_condition_rain(size, x, y, scale);
+        draw_condition_rain(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
     } else {
-        draw_condition_unknown(size, x, y, scale);
+        draw_condition_unknown(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
+    }
+}
+
+void draw_condition_bitmap(const char *condition) {
+    if (string_contains(condition, CC_CLEAR, false) || 
+            string_contains(condition, JSON_SUNNY, false)) {
+        draw_condition_clear(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
+    } else if (string_contains(condition, CC_PARTLY, false)) {
+        draw_condition_partly_cloudy(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
+    } else if (string_contains(condition, CC_CLOUDY, false)) {
+        draw_condition_cloudy(CC_CONDITION_IMG_SIZE, 35, 85, CC_CONDITION_IMG_SCALE);
+    } else if (string_contains(condition, CC_SNOW, false)) {
+        draw_condition_snow(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
+    } else if (string_contains(condition, CC_THUNDER, false)) {
+        draw_condition_storm(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
+    } else if (string_contains(condition, CC_RAIN, false) || 
+            string_contains(condition, CC_SHOWERS, false)) {
+        draw_condition_rain(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
+    } else {
+        draw_condition_unknown(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
     }
 }
 
 void draw_condition_clear(int size, int x, int y, uint32_t scale) {
-    uint16_t *bitmap = get_image_data_from_fs(FILE_SUN_BIN, ICON_IMG_SIZE);
+    uint16_t *bitmap = get_image_data_from_fs(is_night ? FILE_MOON_BIN : FILE_SUN_BIN, ICON_IMG_SIZE);
     draw_bitmap(bitmap, size, x, y, scale);
     free(bitmap);
 }
@@ -460,10 +632,10 @@ void draw_condition_cloudy(int size, int x, int y, uint32_t scale) {
 }
 
 void draw_condition_partly_cloudy(int size, int x, int y, uint32_t scale) {
-    uint16_t *sun_bitmap = get_image_data_from_fs(FILE_SUN_BIN, ICON_IMG_SIZE);
+    uint16_t *sun_bitmap = get_image_data_from_fs(is_night ? FILE_MOON_BIN : FILE_SUN_BIN, ICON_IMG_SIZE);
     uint16_t *cloud_bitmap = get_image_data_from_fs(FILE_CLOUD_BIN, ICON_IMG_SIZE);
     draw_bitmap(sun_bitmap, size, x, y, scale);
-    draw_bitmap(cloud_bitmap, size, x + 5, y, scale);
+    draw_bitmap(cloud_bitmap, size, x - 20, y + 10, scale);
     free(sun_bitmap);
     free(cloud_bitmap);
 }
@@ -472,6 +644,12 @@ void draw_condition_rain(int size, int x, int y, uint32_t scale) {
     uint16_t *rain_bitmap = get_image_data_from_fs(FILE_RAIN_BIN, ICON_IMG_SIZE);
     draw_bitmap(rain_bitmap, size, x, y, scale);
     free(rain_bitmap);
+}
+
+void draw_condition_snow(int size, int x, int y, uint32_t scale) {
+    uint16_t *snow_bitmap = get_image_data_from_fs(FILE_SNOW_BIN, ICON_IMG_SIZE);
+    draw_bitmap(snow_bitmap, size, x, y, scale);
+    free(snow_bitmap);
 }
 
 void draw_condition_storm(int size, int x, int y, uint32_t scale) {
@@ -554,14 +732,6 @@ bool add_alert(const char *event, const char *alert_exp_date_time, const char *s
     return true;
 }
 
-void print_alerts() {
-    struct AlertNode *temp_node = alert_list.root_node;
-    while (temp_node != NULL) {
-        ESP_LOGI(TAG_INFO, "%s", temp_node->data);
-        temp_node = temp_node->next_node;
-    }
-}
-
 bool remove_expired_alerts() {
     if (alert_list.root_node == NULL) {
         return false;
@@ -622,6 +792,9 @@ bool update_time() {
         ESP_LOGE(TAG_ERROR, "Error setting local time.");
         return false;
     }
+
+    // Check if it's currently past 6pm.
+    is_night = local_date_time_tm.tm_hour >= PM_THRESHOLD;
 
     // Now get the UTC timestamp so we can keep track of it for the alerts.
     struct tm utc_date_time_tm = {0};
@@ -702,7 +875,7 @@ bool update_alerts() {
     char alert_exp_date_time[DATE_TIME_STRING_BUFFER_SIZE];
     cJSON *cjson_arr_item_obj = NULL;
     cJSON *cjson_obj_item;
-    uint32_t i;
+    int i;
     int count = cJSON_GetArraySize(cjson_features);
     for (i = 0; i < count ; i++) {
         // Get the severity.
@@ -964,6 +1137,17 @@ bool update_curr_conditions() {
         ESP_LOGI(TAG_INFO, "Set dew point");
     }
 
+    // Visibility
+    int visibility = main_state_list.root_node->cc.visibility;
+    cJSON *cjson_visibility = cJSON_GetObjectItem(cjson_properties, JSON_VISIBILITY);
+    if (cjson_visibility == NULL) {
+        error_bits = ERROR_P_JSON;
+        ESP_LOGE(TAG_ERROR, "Error parsing visibility from JSON.");
+    } else {
+        visibility = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_visibility, JSON_VALUE)) / 1609;
+        ESP_LOGI(TAG_INFO, "Set visibility.");
+    }
+
     cJSON_Delete(cjson_root);
 
     // Calculate the wind direction string
@@ -991,6 +1175,7 @@ bool update_curr_conditions() {
     snprintf(main_state_list.root_node->cc.desc, DESC_BUFFER_SIZE, "%s", desc_buffer);
     main_state_list.root_node->cc.dew_point = dew_point;
     main_state_list.root_node->cc.temperature = temperature;
+    main_state_list.root_node->cc.visibility = visibility;
     snprintf(main_state_list.root_node->cc.wind_dir, WIND_DIR_BUFFER_SIZE, "%s", wind_dir_buffer);
     main_state_list.root_node->cc.wind_speed = wind_speed;
 
@@ -1004,7 +1189,7 @@ bool update_forecast() {
     ESP_LOGI(TAG_INFO, "Removing existing forecast main states ...");
     remove_forecast_main_states();
 
-    // Configure the HTTP client.
+    // Configure the HTTP client.c *
     ESP_LOGI(TAG_INFO, "Getting new forecasts ...");
 
 	size_t request_url_size = strlen(API_HOST) + strlen(NWS_API_POINTS_URL_PART) + strlen(LATITUDE) 
@@ -1100,14 +1285,14 @@ bool update_forecast() {
     char desc_buffer[DESC_BUFFER_SIZE], day_buffer[DAY_BUFFER_SIZE + 16], temp_day_buffer[DAY_BUFFER_SIZE + 16],
         start_time_buffer[DATE_TIME_STRING_BUFFER_SIZE], end_time_buffer[DATE_TIME_STRING_BUFFER_SIZE];
     uint8_t high_temp, low_temp = 0;
-    struct ForecastNode *forecasts_root_node = NULL;
+    struct ExtForecastNode *ext_forecasts_root_node = NULL;
 
     cJSON *cjson_array_item = NULL;
     cJSON *cjson_temp_array_item = NULL;
     cJSON *cjson_array_obj_item = NULL;
     int arr_count = cJSON_GetArraySize(cjson_periods_array);
     int count = arr_count > MAX_EF_COUNT ? MAX_EF_COUNT : arr_count;  // No more than 5
-    uint32_t i;
+    int i;
     uint8_t itr_count = 0;
     for (i = 0; i < count; i++) {
         if (i == arr_count) {
@@ -1120,6 +1305,12 @@ bool update_forecast() {
             error_bits = ERROR_P_JSON;
             ESP_LOGI(TAG_ERROR, "Failed parsing periods array from object at index %d.", i);
             continue;
+        }
+
+        // If this is the first period, grab the forecast and add a main state node.
+        if (i == 0) {
+            cjson_array_obj_item = cJSON_GetObjectItem(cjson_array_item, JSON_DETAILED_FORECAST);
+            add_main_state(STATE_MAIN_LOCAL_FORECAST, cJSON_GetStringValue(cjson_array_obj_item), NULL);
         }
 
         // Get the day. If it's "Tonight," then we need to grab the temperature, add it to the current condition's
@@ -1183,18 +1374,18 @@ bool update_forecast() {
         }
 
         // Add a new extended forecast node
-        struct ForecastNode *new_node = create_forecast_node(desc_buffer, day_buffer, high_temp, low_temp, 
+        struct ExtForecastNode *new_node = create_ext_forecast_node(desc_buffer, day_buffer, high_temp, low_temp, 
             start_time_buffer, end_time_buffer);
-        if (forecasts_root_node == NULL) {
-            forecasts_root_node = new_node;
+        if (ext_forecasts_root_node == NULL) {
+            ext_forecasts_root_node = new_node;
         } else {
-            forecasts_root_node->next_node = new_node;
+            ext_forecasts_root_node->next_node = new_node;
         }
 
         // Add a forecast main state node every 2 forecasts or if we were only able to retrieve 1.
         if (++itr_count == 2 || count == 1) {
-            add_main_state(STATE_MAIN_FORECAST, forecasts_root_node);
-            forecasts_root_node = NULL;
+            add_main_state(STATE_MAIN_FORECAST, NULL, ext_forecasts_root_node);
+            ext_forecasts_root_node = NULL;
             itr_count = 0;
         }
     }
@@ -1326,52 +1517,76 @@ void draw_cc_view() {
     draw_date_time();
 
     // Write the high.
-    char hl_buff[5];
-    memset(hl_buff, 0, 5);
-    snprintf(hl_buff, 5, "%d", main_state_list.root_node->cc.high_temp);
+    char stat_buff[CC_STAT_BUFFER_SIZE];
+    memset(stat_buff, 0, CC_STAT_BUFFER_SIZE);
+    snprintf(stat_buff, CC_STAT_BUFFER_SIZE, "%d", main_state_list.root_node->cc.high_temp);
     draw_high_arrow_bitmap(32, CC_HIGH_ARR_X_POS, CC_ARR_Y_POS, 1);
-    draw_string(hl_buff, CC_HIGH_TEMP_X_POS, CC_HIGH_LOW_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 
+    draw_string(stat_buff, CC_HIGH_TEMP_X_POS, CC_HIGH_LOW_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 
         CC_HIGH_LOW_TEMP_FONT_SCALE);
 
     // Write the low.
-    memset(hl_buff, 0, 5);
-    snprintf(hl_buff, 5, "%d", main_state_list.root_node->cc.low_temp);
+    memset(stat_buff, 0, CC_STAT_BUFFER_SIZE);
+    snprintf(stat_buff, CC_STAT_BUFFER_SIZE, "%d", main_state_list.root_node->cc.low_temp);
     draw_low_arrow_bitmap(32, CC_LOW_ARR_X_POS, CC_ARR_Y_POS, 1);
-    draw_string(hl_buff, CC_LOW_TEMP_X_POS, CC_HIGH_LOW_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 
+    draw_string(stat_buff, CC_LOW_TEMP_X_POS, CC_HIGH_LOW_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 
         CC_HIGH_LOW_TEMP_FONT_SCALE);
 
     // Write the temperature.
-    char temp_buff[5];
-    memset(temp_buff, 0, 5);
-    snprintf(temp_buff, 5, "%i %c", main_state_list.root_node->cc.temperature, temperature_char);
-    draw_string(temp_buff, CC_TEMP_X_POS, CC_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 3);
+    memset(stat_buff, 0, CC_STAT_BUFFER_SIZE);
+    snprintf(stat_buff, CC_STAT_BUFFER_SIZE, "%d %c", main_state_list.root_node->cc.temperature, temperature_char);
+    draw_string(stat_buff, CC_TEMP_X_POS, CC_TEMP_Y_POS, DGX_WHITE(dgx_rgb_to_16), 3);
 
     // Write the wind data.
-    uint16_t wind_buff_size = 10 + WIND_DIR_BUFFER_SIZE;
-    char wind_buff[wind_buff_size];
-    memset(wind_buff, 0, wind_buff_size);
-    snprintf(wind_buff, wind_buff_size, "%s %.1f mph", main_state_list.root_node->cc.wind_dir, 
+    memset(stat_buff, 0, CC_STAT_BUFFER_SIZE);
+    snprintf(stat_buff, CC_STAT_BUFFER_SIZE, "%s %.1f mph", main_state_list.root_node->cc.wind_dir, 
         main_state_list.root_node->cc.wind_speed);
-    draw_string(wind_buff, CC_WIND_X_POS, CC_WIND_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
+    draw_string(stat_buff, CC_WIND_X_POS, CC_WIND_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
 
     // Write the dew point
-    char dew_point_buff[8];
-    memset(dew_point_buff, 0, 8);
-    snprintf(dew_point_buff, 8, "%.1f %c", main_state_list.root_node->cc.dew_point, temperature_char);
-    draw_string(dew_point_buff, CC_DEW_POINT_X_POS, CC_DEW_POINT_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
-    draw_dew_point_bitmap(CC_DEW_POINT_IMG_SIZE, CC_DEW_POINT_X_POS - 15, CC_DEW_POINT_IMG_Y_POS, 1);
+    memset(stat_buff, 0, CC_STAT_BUFFER_SIZE);
+    snprintf(stat_buff, CC_STAT_BUFFER_SIZE, "%.1f %c", main_state_list.root_node->cc.dew_point, temperature_char);
+    draw_string(stat_buff, CC_DEW_POINT_X_POS, CC_DEW_POINT_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
+    draw_dew_point_bitmap(CC_DEW_POINT_IMG_SIZE, CC_DEW_POINT_X_POS - 20, CC_DEW_POINT_IMG_Y_POS, 1);
+
+    // Write the visibility.
+    memset(stat_buff, 0, CC_STAT_BUFFER_SIZE);
+    snprintf(stat_buff, CC_STAT_BUFFER_SIZE, "%d mi", main_state_list.root_node->cc.visibility);
+    draw_string(stat_buff, CC_VISIBILITY_X_POS, CC_VISIBILITY_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
 
     // Write the current description.
     draw_string(main_state_list.root_node->cc.desc, CC_DESC_X_POS, CC_DESC_Y_POS, DGX_WHITE(dgx_rgb_to_16), 3);
 
     // Determine what condition to draw based on the description.
-    draw_condition_bitmap(main_state_list.root_node->cc.desc, CC_CONDITIONG_IMG_SIZE, CC_CONDITION_IMG_X_POS, 
-        CC_CONDITION_IMG_Y_POS, CC_CONDITION_IMG_SCALE);
+    draw_condition_bitmap(main_state_list.root_node->cc.desc);
 
     ESP_LOGI(TAG_INFO, "Finished drawing CC: %lu B", esp_get_free_heap_size());
 }
 
-void draw_forecast_view() {
+void draw_local_forecast_view() {
+    // Clear the screen.
+    clear_screen();
+
+    // Draw the header rectangle
+    draw_header_rect();
+
+    // Draw the header text
+    draw_header_string(HEADER_LOCAL_FORECAST);
+
+    // Write the date and time.
+    draw_date_time();
+
+    // Draw the container.
+    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS, CC_CONTAINER_Y_POS, CC_CONTAINER_W, CC_CONTAINER_H, 
+        DGX_DARKCYAN(dgx_rgb_to_16));
+    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS + 2, CC_CONTAINER_Y_POS + 2, CC_CONTAINER_W - 4, CC_CONTAINER_H - 4, 
+        CC_CONTAINER_COLOR);
+
+    // Draw the forecast data.
+    draw_string_wrapped(main_state_list.curr_node->local_forecast, LF_TEXT_X_POS, LF_TEXT_Y_POS, 
+        DGX_WHITE(dgx_rgb_to_16), LF_TEXT_FONT_SCALE, LF_TEXT_BOUND_W, CC_CONTAINER_H);
+}
+
+void draw_ext_forecast_view() {
     // Clear the screen.
     clear_screen();
 
@@ -1385,9 +1600,9 @@ void draw_forecast_view() {
     draw_date_time();
 
     // Draw the forecast data.
-    int i = 0;
-    int day_x_pos, container_x_pos, img_x_pos, high_temp_x_pos, low_temp_x_pos;
-    struct ForecastNode *temp_node = main_state_list.curr_node->forecasts_root_node;
+    uint8_t i = 0;
+    int day_x_pos, container_x_pos, high_temp_x_pos, low_temp_x_pos;
+    struct ExtForecastNode *temp_node = main_state_list.curr_node->ext_forecasts_root_node;
     char temperature_buffer[EF_TEMP_BUFFER_SIZE];
     while (temp_node != NULL) {
         // Draw container rectangle
@@ -1402,8 +1617,7 @@ void draw_forecast_view() {
         draw_string(temp_node->day, day_x_pos, EF_DAY_Y_POS, DGX_WHITE(dgx_rgb_to_16), 3);
         
         // Draw the icon.
-        img_x_pos = i == 0 ? EF_DAY_1_IMG_X_POS : EF_DAY_2_IMG_X_POS;
-        draw_condition_bitmap(temp_node->desc, EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
+        draw_ext_forecast_condition_bitmap(temp_node->desc, i);
 
         // Write the high temp.
         high_temp_x_pos = i == 0 ? EF_DAY_1_HIGH_TEMP_X_POS : EF_DAY_2_HIGH_TEMP_X_POS;
@@ -1482,6 +1696,19 @@ void draw_si_view() {
     uint32_t min_free_heap_size = esp_get_minimum_free_heap_size();
     snprintf(heap_size, HEAP_SIZE_BUFFER_SIZE, "Min Free Heap Size: %lu B", min_free_heap_size);
     draw_string(heap_size, SI_X_POS, SI_MIN_FREE_HEAP_SIZE_Y_POS, DGX_WHITE(dgx_rgb_to_16), SI_FONT_SCALE);
+}
+
+void draw_test_wrapped_text_view() {
+    draw_header_rect();
+    draw_header_string("Wrapped Text");
+    
+    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS, CC_CONTAINER_Y_POS, CC_CONTAINER_W, CC_CONTAINER_H, 
+        DGX_DARKCYAN(dgx_rgb_to_16));
+    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS + 2, CC_CONTAINER_Y_POS + 2, CC_CONTAINER_W - 4, CC_CONTAINER_H - 4, 
+        CC_CONTAINER_COLOR);
+
+    draw_string_wrapped(TEST_WRAPPED_TEXT, CC_CONTAINER_X_POS + 5, 60, DGX_WHITE(dgx_rgb_to_16), 2, 
+        CC_CONTAINER_W - 4, CC_CONTAINER_H);
 }
 
 void draw_curr_alert() {
@@ -1571,13 +1798,17 @@ void check_and_update_display(void *arg) {
         if (curr_state == STATE_MAIN) {
             if (main_state_list.curr_node->state == STATE_MAIN_CC) {
                 draw_cc_view();
-            } else {
-                draw_forecast_view();
+            } else if (main_state_list.curr_node->state == STATE_MAIN_LOCAL_FORECAST) {
+                draw_local_forecast_view();
+            } else if (main_state_list.curr_node->state == STATE_MAIN_FORECAST) {
+                draw_ext_forecast_view();
             }
         } else if (curr_state == STATE_MENU) {
             draw_menu_view();
         } else if (curr_state == STATE_SI) {
             draw_si_view();
+        } else if (curr_state == STATE_WRAPPED_TEXT) {
+            draw_test_wrapped_text_view();
         }
         if (alert_list.curr_node != NULL) {
             draw_curr_alert();  // We always want to show alerts on top of whatever screen we're on.
@@ -1590,10 +1821,7 @@ void check_and_update_display(void *arg) {
 void menu_btn_event(void *arg, void *usr_data) {
     if (curr_state == STATE_MENU) {
         update_menu(true, false, false);
-    } else if (curr_state == STATE_MAIN) {
-        curr_state = STATE_MENU;
-        xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
-    } else if (curr_state == STATE_SI) {
+    } else if (curr_state == STATE_SI || curr_state == STATE_WRAPPED_TEXT || curr_state == STATE_MAIN) {
         curr_state = STATE_MENU;
         xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
     }
@@ -1660,7 +1888,6 @@ void cycle_main_states(void *arg) {
         xTaskNotifyGiveIndexed(refresh_display_task_handle, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-
 }
 
 void alert_cycle_timer_callback(TimerHandle_t xTimer) {
@@ -1878,7 +2105,7 @@ void init_main_states() {
     struct MainStateNode *cc_node = (struct MainStateNode*) calloc(1, sizeof(struct MainStateNode));
     struct CurrentConditions cc = {0};
     cc_node->cc = cc;
-    cc_node->forecasts_root_node = NULL;
+    cc_node->ext_forecasts_root_node = NULL;
     cc_node->next_node = NULL;
     cc_node->state = STATE_MAIN_CC;
 
@@ -1958,7 +2185,7 @@ void app_main(void) {
             &cycle_main_state_task_handle)) != pdPASS) {
         ESP_LOGE(TAG_ERROR, "Error creating cycle_main_states task.");
     }
-    if ((result = xTaskCreate(check_and_update_display, "check_and_update_display", 4028, NULL, 6, 
+    if ((result = xTaskCreate(check_and_update_display, "check_and_update_display", 8192, NULL, 6, 
             &refresh_display_task_handle)) != pdPASS) {
         ESP_LOGE(TAG_ERROR, "Error creating check_and_update_display task.");
     }
@@ -1978,6 +2205,8 @@ void app_main(void) {
     }
 
     // Trigger the initial data retrieval tasks
+    curr_state = STATE_MAIN;
+
     xTaskNotifyGiveIndexed(cc_task_handle, 0);
     xTaskNotifyGiveIndexed(forecast_task_handle, 0);
     xTaskNotifyGiveIndexed(alert_task_handle, 0);
