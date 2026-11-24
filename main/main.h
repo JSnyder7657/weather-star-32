@@ -81,6 +81,8 @@
 #define MENU_OPTION_SCROLLING_TEXT  "Scrolling Text"
 #define MENU_OPTION_WRAPPED_TEXT  "Wrapped Text"
 
+#define MENU_PRESS_MENU_BTN_TO_EXIT_VIEW  "Press 'Menu' button to exit view"
+
 // State constants
 #define STATE_INIT  UINT8_C(0)
 #define STATE_MAIN  UINT8_C(1)
@@ -129,8 +131,7 @@
 #define FILE_NOAA_BIN "noaa.bin"
 #define FILE_FOG_BIN  "fog.bin"
 
-#define LOGO_IMG_SIZE UINT16_C(32768)
-#define ICON_IMG_SIZE UINT16_C(1024)
+#define ICON_IMG_SIZE 1024U
 
 // UI string constants
 #define HEADER_CURR_CONDITIONS   "Current Conditions"
@@ -166,12 +167,10 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define MAX_EF_COUNT  UINT8_C(7)
 
 // Menu constants
-#define MENU_JSON_STR "{\"Menu\":{\"Back\":0,\"Settings\":{\"Back\":0},\"Tests\":{\"Back\":0,\"EAS\":[\"Back\",\"Blizzard Watch\",\"Blizzard Warning\",\"Severe T'storm Watch\",\"Severe T'storm Warning\",\"Tornado Watch\",\"Tornado Warning\"],\"Current Conditions\":[\"Back\",\"Clear\",\"Cloudy\",\"Fog\",\"Partly Cloudy\",\"Scattered Showers\",\"Snow\",\"Thunderstorm\"],\"Wrapped Text\":0},\"View System Info\":0,\"Clear Error Code\":0,\"Update Forecasts\":0,\"Update Current Conditions\":0}}"
+#define MENU_JSON_STR "{\"Menu\":{\"Back\":0,\"Settings\":{\"Back\":0},\"Tests\":{\"Back\":0,\"EAS\":[\"Back\",\"Blizzard Watch\",\"Blizzard Warning\",\"Severe T'storm Watch\",\"Severe T'storm Warning\",\"Tornado Watch\",\"Tornado Warning\"],\"Current Conditions\":[\"Back\",\"Clear\",\"Cloudy\",\"Fog\",\"Partly Cloudy\",\"Scattered Showers\",\"Snow\",\"Thunderstorm\"],\"Wrapped Text\":0},\"View System Info\":0,\"Clear Error Code\":0,\"Update Forecasts\":0,\"Update Current Conditions\":0,\"Test\":0}}"
 #define MENU_NODE_DATA_BUFFER_SIZE  UINT8_C(50)
 #define MENU_OPTION_BUFFER_SIZE UINT8_C(50)
-#define MENU_OPTIONS_X  INT16_C(5)
-#define MENU_MAX_OPTIONS_DISPLAYED  UINT8_C(6)
-#define MENU_OPTIONS_OFFSET UINT8_C(20)
+#define MENU_MAX_OPTIONS_DISPLAYED  UINT8_C(8)
 
 // System info constants
 #define HEAP_SIZE_BUFFER_SIZE UINT8_C(32)
@@ -185,110 +184,114 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define BUZZER_DUTY UINT16_C(700)
 
 // UI constants
-#define CC_CONTAINER_COLOR  dgx_rgb_to_16(41, 54, 103)
+#define MAIN_CONTAINER_COLOR  dgx_rgb_to_16(41, 54, 103)
 #define TEXT_SIZE   UINT8_C(2)
-#define SHADOW_OFFSET UINT8_C(3)
+#define SHADOW_OFFSET INT8_C(3)
 
-#define HEADER_RECT_X_POS UINT8_C(0)
-#define HEADER_RECT_Y_POS UINT8_C(10)
-#define HEADER_RECT_W UINT8_C(210)
-#define HEADER_RECT_H UINT8_C(40)
-#define HEADER_TEXT_X_POS UINT8_C(10)
-#define HEADER_TEXT_Y_POS UINT8_C(35)
+#define HEADER_RECT_X_POS INT8_C(0)
+#define HEADER_RECT_Y_POS INT8_C(10)
+#define HEADER_RECT_W INT16_C(210)
+#define HEADER_RECT_H INT8_C(40)
+#define HEADER_TEXT_X_POS INT16_C(10)
+#define HEADER_TEXT_Y_POS INT16_C(35)
 
-#define DATE_X_POS UINT8_C(220)
-#define DATE_Y_POS  UINT8_C(25)
-#define TIME_X_POS  UINT8_C(240)
-#define TIME_Y_POS  UINT8_C(45)
+#define DATE_X_POS INT16_C(220)
+#define DATE_Y_POS  INT8_C(25)
+#define TIME_X_POS  INT16_C(240)
+#define TIME_Y_POS  INT8_C(45)
 
-#define EF_DAY_1_CONTAINER_X_POS  UINT8_C(5)
-#define EF_DAY_2_CONTAINER_X_POS  UINT8_C(165)
-#define EF_CONTAINER_Y_POS  UINT8_C(60)
-#define EF_DAY_1_DAY_X_POS  UINT8_C(62)
-#define EF_DAY_2_DAY_X_POS  UINT8_C(220)
-#define EF_DAY_Y_POS  UINT8_C(95)
+#define EF_DAY_1_CONTAINER_X_POS  INT8_C(5)
+#define EF_DAY_2_CONTAINER_X_POS  INT8_C(165)
+#define EF_CONTAINER_Y_POS  INT8_C(60)
+#define EF_DAY_1_DAY_X_POS  INT8_C(62)
+#define EF_DAY_2_DAY_X_POS  INT16_C(220)
+#define EF_DAY_Y_POS  INT8_C(95)
 
-#define EF_DAY_1_LOW_TEMP_X_POS  UINT8_C(111)
-#define EF_DAY_2_LOW_TEMP_X_POS  UINT8_C(271)
-#define EF_DAY_1_HIGH_TEMP_X_POS UINT8_C(45)
-#define EF_DAY_2_HIGH_TEMP_X_POS UINT8_C(205)
-#define EF_TEMP_Y_POS  UINT8_C(210)
+#define EF_DAY_1_LOW_TEMP_X_POS  INT8_C(111)
+#define EF_DAY_2_LOW_TEMP_X_POS  INT16_C(271)
+#define EF_DAY_1_HIGH_TEMP_X_POS INT8_C(45)
+#define EF_DAY_2_HIGH_TEMP_X_POS INT16_C(205)
+#define EF_TEMP_Y_POS  INT16_C(210)
 #define EF_TEMP_FONT_SCALE UINT8_C(3)
 
-#define EF_CONTAINER_H  UINT8_C(166)
-#define EF_CONTAINER_W  UINT8_C(146)
+#define EF_CONTAINER_H  INT8_C(166)
+#define EF_CONTAINER_W  INT8_C(146)
 
-#define EF_IMG_SIZE UINT8_C(32)
+#define EF_IMG_SIZE INT8_C(32)
 #define EF_IMG_SCALE  UINT8_C(2)
 
-#define EF_DAY_1_IMG_X_POS  UINT8_C(50)
-#define EF_DAY_2_IMG_X_POS  UINT8_C(209)
-#define EF_IMG_Y_POS  UINT8_C(115)
+#define EF_DAY_1_IMG_X_POS  INT8_C(50)
+#define EF_DAY_2_IMG_X_POS  INT16_C(209)
+#define EF_IMG_Y_POS  INT8_C(115)
 
-#define EF_HIGH_LOW_ARR_Y_POS UINT8_C(185)
+#define EF_HIGH_LOW_ARR_Y_POS INT16_C(185)
 
 #define EF_TEMP_BUFFER_SIZE  UINT8_C(4)
 
-#define CC_HIGH_ARR_X_POS UINT8_C(199)
-#define CC_LOW_ARR_X_POS  UINT8_C(253)
-#define CC_ARR_Y_POS  UINT8_C(70)
+#define CC_HIGH_ARR_X_POS INT16_C(199)
+#define CC_LOW_ARR_X_POS  INT16_C(253)
+#define CC_ARR_Y_POS  INT8_C(70)
 
-#define CC_HIGH_TEMP_X_POS  UINT8_C(234)
-#define CC_LOW_TEMP_X_POS UINT8_C(289)
-#define CC_HIGH_LOW_TEMP_Y_POS  UINT8_C(95)
+#define CC_HIGH_TEMP_X_POS  INT16_C(234)
+#define CC_LOW_TEMP_X_POS INT16_C(289)
+#define CC_HIGH_LOW_TEMP_Y_POS  INT8_C(95)
 #define CC_HIGH_LOW_TEMP_FONT_SCALE  UINT8_C(2)
 
-#define CC_TEMP_X_POS UINT8_C(255)
-#define CC_TEMP_Y_POS UINT8_C(130)
+#define CC_TEMP_X_POS INT16_C(255)
+#define CC_TEMP_Y_POS INT8_C(130)
 
-#define CC_WIND_X_POS UINT8_C(210)
-#define CC_WIND_Y_POS UINT8_C(160)
+#define CC_WIND_X_POS INT16_C(210)
+#define CC_WIND_Y_POS INT8_C(160)
 
-#define CC_DEW_POINT_X_POS  UINT8_C(255)
-#define CC_DEW_POINT_Y_POS  UINT8_C(185)
-#define CC_DEW_POINT_IMG_Y_POS  UINT8_C(170)
-#define CC_DEW_POINT_IMG_SIZE UINT8_C(16)
+#define CC_DEW_POINT_X_POS  INT16_C(255)
+#define CC_DEW_POINT_Y_POS  INT16_C(185)
+#define CC_DEW_POINT_IMG_Y_POS  INT16_C(170)
+#define CC_DEW_POINT_IMG_SIZE INT8_C(16)
 
-#define CC_VISIBILITY_X_POS UINT8_C(190)
-#define CC_VISIBILITY_Y_POS UINT8_C(185)
+#define CC_VISIBILITY_X_POS INT16_C(190)
+#define CC_VISIBILITY_Y_POS INT16_C(185)
 
-#define CC_DESC_X_POS UINT8_C(30)
-#define CC_DESC_Y_POS UINT8_C(210)
+#define CC_DESC_X_POS INT8_C(30)
+#define CC_DESC_Y_POS INT16_C(210)
 
-#define CC_CONDITION_IMG_SIZE  UINT8_C(32)
-#define CC_CONDITION_IMG_X_POS  UINT8_C(65)
-#define CC_CONDITION_IMG_Y_POS  UINT8_C(85)
-#define CC_CONDITION_IMG_SCALE  UINT8_C(3)
+#define CC_CONDITION_IMG_SIZE  INT8_C(32)
+#define CC_CONDITION_IMG_X_POS  INT8_C(65)
+#define CC_CONDITION_IMG_Y_POS  INT8_C(85)
+#define CC_CONDITION_IMG_SCALE  INT8_C(3)
 
-#define CC_CONTAINER_X_POS  UINT8_C(5)
-#define CC_CONTAINER_Y_POS  UINT8_C(60)
-#define CC_CONTAINER_W  INT16_C(310)
-#define CC_CONTAINER_H  INT16_C(170)
+#define MAIN_CONTAINER_X_POS  INT8_C(5)
+#define MAIN_CONTAINER_Y_POS  INT8_C(60)
+#define MAIN_CONTAINER_W  INT16_C(310)
+#define MAIN_CONTAINER_H  INT16_C(170)
 
-#define SI_X_POS UINT8_C(10)
-#define SI_FREE_HEAP_SIZE_Y_POS UINT8_C(60)
-#define SI_MIN_FREE_HEAP_SIZE_Y_POS UINT8_C(90)
-#define SI_FONT_SCALE UINT8_C(2)
+#define SI_X_POS INT8_C(10)
+#define SI_FREE_HEAP_SIZE_Y_POS INT8_C(60)
+#define SI_MIN_FREE_HEAP_SIZE_Y_POS INT8_C(90)
+#define SI_FONT_SCALE INT8_C(2)
 
-#define ALERT_TEXT_X_POS  UINT8_C(10)
-#define ALERT_TEXT_Y_POS  UINT8_C(20)
-#define ALERT_RECT_X_POS  UINT8_C(0)
-#define ALERT_RECT_Y_POS  UINT8_C(0)
-#define ALERT_RECT_W  UINT8_C(320)
-#define ALERT_RECT_H UINT8_C(30)
+#define ALERT_TEXT_X_POS  INT8_C(10)
+#define ALERT_TEXT_Y_POS  INT8_C(20)
+#define ALERT_RECT_X_POS  INT8_C(0)
+#define ALERT_RECT_Y_POS  INT8_C(0)
+#define ALERT_RECT_W  INT16_C(320)
+#define ALERT_RECT_H INT8_C(30)
 
-#define LF_TEXT_BOUND_W UINT16_C(300)
-#define LF_TEXT_X_POS UINT8_C(10)
-#define LF_TEXT_Y_POS UINT8_C(65)
-#define LF_TEXT_FONT_SCALE  UINT8_C(2)
+#define LF_TEXT_BOUND_W INT16_C(300)
+#define LF_TEXT_X_POS INT8_C(10)
+#define LF_TEXT_Y_POS INT8_C(65)
+#define LF_TEXT_FONT_SCALE  INT8_C(2)
 
-#define NOAA_LOGO_IMG_X_POS UINT8_C(150)
-#define NOAA_LOGO_IMG_Y_POS UINT8_C(12)
+#define NOAA_LOGO_IMG_X_POS INT16_C(150)
+#define NOAA_LOGO_IMG_Y_POS INT8_C(12)
 
-#define WRAPPED_TEXT_ROW_OFFEST INT16_C(15)
+#define MENU_OPTION_X_POS  INT8_C(10)
+#define MENU_OPTION_Y_POS INT8_C(60)
+#define MENU_OPTION_OFFSET INT8_C(20)
+#define MENU_TEXT_FONT_SCALE  UINT8_C(2)
+
+#define WRAPPED_TEXT_ROW_OFFEST INT8_C(15)
 #define WRAPPED_TEXT_MAX_NUM_ROWS INT8_C(10)
 #define WRAPPED_TEXT_TEMP_BUFFER_SIZE UINT16_C(512)
-
 #define SHADOW_IMG_REPLACEMENT_COLOR  UINT16_C(0x1082)
 
 // Weather data constants
@@ -305,6 +308,7 @@ const gpio_num_t PIN_INC_DATA_LED = (gpio_num_t) GPIO_NUM_26;
 #define CURR_CONDITIONS_REFRESH_TIME_MS UINT64_C(300000) // 5 minutes
 #define ALERTS_TIME_REFRESH_MS  UINT32_C(120000)  // 2 minutes
 #define TIME_REFRESH_TIME_MS  UINT16_C(60000) // 1 minute
+#define MAIN_STATE_PROGRESS_BAR_TIME_MS UINT8_C(10)
 
 // Current conditions constants
 #define PM_THRESHOLD  UINT8_C(18)
@@ -415,7 +419,7 @@ struct MenuNode *root_menu_node, *curr_parent_node, *curr_menu_node, *curr_secti
 struct MainStateList main_state_list = {0};
 
 // Error bits
-uint8_t error_bits, prev_error_bits = 0x00;
+uint8_t error_bits = 0x00;
 
 // Shift register configuration
 shiftregister_config_t reg_config = {
@@ -439,6 +443,10 @@ TimerHandle_t alert_cycle_timer, main_view_cycle_timer, cc_refresh_timer, foreca
 
 // File system
 esp_vfs_littlefs_conf_t conf;
+
+// Macro functions
+//*********************************************************************************************************************
+#define CONVERT_TO_UNITS(T, val) ({*val = DEG_F ? (*val * 1.8) + 32 : *val;})
 
 // Function prototypes
 //*********************************************************************************************************************
@@ -499,6 +507,7 @@ void draw_string_wrapped(const char *str, int16_t x, int16_t y, uint32_t color, 
 void draw_alert(struct AlertNode *alert);
 
 void draw_date_time();
+void draw_exit_instructions(int x, int y);
 
 void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale);
 void draw_low_arrow_bitmap(int size, int x, int y, uint32_t scale);
@@ -509,7 +518,7 @@ void draw_noaa_logo_bitmap(int size, int x, int y, uint32_t scale);
 void draw_ext_forecast_condition_bitmap(const char *condition, uint8_t day);
 void draw_condition_bitmap(const char *condition);
 
-void draw_condition_clear(int size, int x, int y, uint32_t scale);
+void draw_condition_clear(int size, int x, int y, uint32_t scale, bool time_sensitive);
 void draw_condition_cloudy(int size, int x, int y, uint32_t scale);
 void draw_condition_fog(int size, int x, int y, uint32_t scale);
 void draw_condition_partly_cloudy(int size, int x, int y, uint32_t scale);
@@ -517,6 +526,8 @@ void draw_condition_rain(int size, int x, int y, uint32_t scale);
 void draw_condition_snow(int size, int x, int y, uint32_t scale);
 void draw_condition_storm(int size, int x, int y, uint32_t scale);
 void draw_condition_unknown(int size, int x, int y, uint32_t scale);
+
+void draw_main_container();
 
 void clear_screen();
 
@@ -532,9 +543,6 @@ bool add_alert(const char *event, const char *alert_exp_date_time, const char *s
 bool remove_expired_alerts();
 
 //*********************************************************************************************************************
-
-void set_int_temperature_val(int *temperature_val);
-void set_float_temperature_val(float *temperature_val);
 
 bool update_time();
 bool update_alerts();
@@ -575,9 +583,10 @@ void play_eas_tone_buzzer_2(void *arg);
 void cycle_alerts(void *arg);
 void cycle_main_states(void *arg);
 
+//*********************************************************************************************************************
+
 void alert_cycle_timer_callback(TimerHandle_t xTimer);
 void main_view_cycle_timer_callback(TimerHandle_t xTimer);
-
 void cc_refresh_timer_callback(TimerHandle_t xTimer);
 void forecast_refresh_timer_callback(TimerHandle_t xTimer);
 void alert_refresh_timer_callback(TimerHandle_t xTimer);

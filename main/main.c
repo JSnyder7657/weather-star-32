@@ -519,6 +519,10 @@ void draw_date_time() {
     draw_string(time_, TIME_X_POS, TIME_Y_POS, DGX_WHITE(dgx_rgb_to_16), 2);
 }
 
+void draw_exit_instructions(int x, int y) {
+    draw_string(MENU_PRESS_MENU_BTN_TO_EXIT_VIEW, x, y, DGX_YELLOW(dgx_rgb_to_16), 1);
+}
+
 void draw_bitmap(const uint16_t *bitmap, int size, int x, int y, uint32_t scale) {
     if (bitmap == NULL) {
         return;
@@ -579,12 +583,6 @@ void draw_dew_point_bitmap(int size, int x, int y, uint32_t scale) {
     free(image_data);
 }
 
-void draw_logo_bitmap(int size, int x, int y, uint32_t scale) {
-    uint16_t *image_data = get_image_data_from_fs(FILE_LOGO_BIN, LOGO_IMG_SIZE);
-    draw_bitmap(image_data, size, x, y, scale);
-    free(image_data);
-}
-
 void draw_noaa_logo_bitmap(int size, int x, int y, uint32_t scale) {
     uint16_t *image_data = get_image_data_from_fs(FILE_NOAA_BIN, ICON_IMG_SIZE);
     draw_bitmap(image_data, size, x, y, scale);
@@ -595,7 +593,7 @@ void draw_ext_forecast_condition_bitmap(const char *condition, uint8_t day) {
     int img_x_pos = day == 0 ? EF_DAY_1_IMG_X_POS : EF_DAY_2_IMG_X_POS;
 
     if (string_contains(condition, CC_CLEAR, false) || string_contains(condition, JSON_SUNNY, false)) {
-        draw_condition_clear(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
+        draw_condition_clear(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE, false);
     } else if (string_contains(condition, CC_PARTLY, false)) {
         draw_condition_partly_cloudy(EF_IMG_SIZE, img_x_pos, EF_IMG_Y_POS, EF_IMG_SCALE);
     } else if (string_contains(condition, CC_CLOUDY, false)) {
@@ -613,7 +611,7 @@ void draw_ext_forecast_condition_bitmap(const char *condition, uint8_t day) {
 
 void draw_condition_bitmap(const char *condition) {
     if (string_contains(condition, CC_CLEAR, false) || string_contains(condition, JSON_SUNNY, false)) {
-        draw_condition_clear(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
+        draw_condition_clear(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE, true);
     } else if (string_contains(condition, CC_PARTLY, false)) {
         draw_condition_partly_cloudy(CC_CONDITION_IMG_SIZE, 60, 80, CC_CONDITION_IMG_SCALE);
     } else if (string_contains(condition, CC_CLOUDY, false)) {
@@ -631,8 +629,9 @@ void draw_condition_bitmap(const char *condition) {
     }
 }
 
-void draw_condition_clear(int size, int x, int y, uint32_t scale) {
-    uint16_t *bitmap = get_image_data_from_fs(is_night ? FILE_MOON_BIN : FILE_SUN_BIN, ICON_IMG_SIZE);
+void draw_condition_clear(int size, int x, int y, uint32_t scale, bool time_sensistive) {
+    uint16_t *bitmap = time_sensistive ? get_image_data_from_fs(is_night ? FILE_MOON_BIN : FILE_SUN_BIN, ICON_IMG_SIZE) 
+        : get_image_data_from_fs(FILE_SUN_BIN, ICON_IMG_SIZE);
     draw_bitmap(bitmap, size, x, y, scale);
     free(bitmap);
 }
@@ -682,6 +681,13 @@ void draw_condition_unknown(int size, int x, int y, uint32_t scale) {
     uint16_t *unknown_bitmap = get_image_data_from_fs(FILE_UNKNOWN_BIN, ICON_IMG_SIZE);
     draw_bitmap(unknown_bitmap, size, x, y, scale);
     free(unknown_bitmap);
+}
+
+void draw_main_container() {
+    dgx_fill_rectangle(tft, MAIN_CONTAINER_X_POS, MAIN_CONTAINER_Y_POS, MAIN_CONTAINER_W, MAIN_CONTAINER_H, 
+        DGX_DARKCYAN(dgx_rgb_to_16));
+    dgx_fill_rectangle(tft, MAIN_CONTAINER_X_POS + 2, MAIN_CONTAINER_Y_POS + 2, MAIN_CONTAINER_W - 4, 
+        MAIN_CONTAINER_H - 4, MAIN_CONTAINER_COLOR);
 }
 
 void clear_screen() {
@@ -785,20 +791,6 @@ bool remove_expired_alerts() {
 }
 
 //*********************************************************************************************************************
-
-void set_int_temperature_val(int *temperature_val) {
-    if (DEG_F) {
-        *temperature_val = (*temperature_val * 1.8) + 32;
-    }
-    ESP_LOGI(TAG_INFO, "Int: %i", *temperature_val);
-}
-
-void set_float_temperature_val(float *temperature_val) {
-    if (DEG_F) {
-        *temperature_val = (*temperature_val * 1.8) + 32;
-    }
-    ESP_LOGI(TAG_INFO, "Float: %.f", *temperature_val);
-}
 
 bool update_time() {
     ESP_LOGI(TAG_INFO, "Updating time ...");
@@ -1104,9 +1096,13 @@ bool update_curr_conditions() {
         ESP_LOGE(TAG_ERROR, "Error parsing temperature from JSON.");
     } else {
         cJSON *value_obj = cJSON_GetObjectItem(cjson_temperature, JSON_VALUE);
-        if (cJSON_IsNumber(value_obj)) {
+        if (!cJSON_IsNumber(value_obj)) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing temperature from JSON.");
+        } else {
             temperature = cJSON_GetNumberValue(value_obj);
-            set_int_temperature_val(&temperature);
+            CONVERT_TO_UNITS(int, &temperature);
+            ESP_LOGI(TAG_INFO, "Parsed temperature.");
         }
     }
 
@@ -1117,9 +1113,15 @@ bool update_curr_conditions() {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing description from JSON.");
     } else {
-        memset(desc_buffer, 0, DESC_BUFFER_SIZE);
-        snprintf(desc_buffer, DESC_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_desc));
-        ESP_LOGI(TAG_INFO, "Set description");
+        char *desc = cJSON_GetStringValue(cjson_desc);
+        if (desc == NULL) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing description from JSON.");
+        } else {
+            memset(desc_buffer, 0, DESC_BUFFER_SIZE);
+            snprintf(desc_buffer, DESC_BUFFER_SIZE, "%s", cJSON_GetStringValue(cjson_desc));
+            ESP_LOGI(TAG_INFO, "Parsed description");
+        }
     }
 
     // Wind speed
@@ -1129,8 +1131,14 @@ bool update_curr_conditions() {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing wind speed from JSON.");
     } else {
-        wind_speed = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_wind_speed, JSON_VALUE));
-        ESP_LOGI(TAG_INFO, "Set wind speed");
+        cJSON *cjson_wind_speed_val = cJSON_GetObjectItem(cjson_wind_speed, JSON_VALUE);
+        if (!cJSON_IsNumber(cjson_wind_speed_val)) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing wind speed from JSON.");
+        } else {
+            wind_speed = cJSON_GetNumberValue(cjson_wind_speed_val);
+            ESP_LOGI(TAG_INFO, "Parsed wind speed");
+        }
     }
 
     // Wind direction
@@ -1141,8 +1149,14 @@ bool update_curr_conditions() {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing wind direction from JSON.");
     } else {
-        wind_dir_f = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_wind_dir, JSON_VALUE));
-        ESP_LOGI(TAG_INFO, "Wind direction");
+        cJSON *cjson_wind_dir_val = cJSON_GetObjectItem(cjson_wind_dir, JSON_VALUE);
+        if (!cJSON_IsNumber(cjson_wind_dir_val)) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing wind direction from JSON.");
+        } else {
+            wind_dir_f = cJSON_GetNumberValue(cjson_wind_dir_val);
+            ESP_LOGI(TAG_INFO, "Parsed wind direction");
+        }
     }
 
     // Dew point
@@ -1152,9 +1166,15 @@ bool update_curr_conditions() {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing dew point from JSON.");
     } else {
-        dew_point = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_dew_point, JSON_VALUE));
-        set_float_temperature_val(&dew_point);
-        ESP_LOGI(TAG_INFO, "Set dew point");
+        cJSON *cjson_dew_point_val = cJSON_GetObjectItem(cjson_dew_point, JSON_VALUE);
+        if (!cJSON_IsNumber(cjson_dew_point_val)) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing dew point from JSON.");
+        } else {
+            dew_point = cJSON_GetNumberValue(cjson_dew_point_val);
+            CONVERT_TO_UNITS(float, &dew_point);
+            ESP_LOGI(TAG_INFO, "Parsed dew point");
+        }
     }
 
     // Visibility
@@ -1164,8 +1184,14 @@ bool update_curr_conditions() {
         error_bits = ERROR_P_JSON;
         ESP_LOGE(TAG_ERROR, "Error parsing visibility from JSON.");
     } else {
-        visibility = cJSON_GetNumberValue(cJSON_GetObjectItem(cjson_visibility, JSON_VALUE)) / 1609;
-        ESP_LOGI(TAG_INFO, "Set visibility.");
+        cJSON *cjson_visibility_val = cJSON_GetObjectItem(cjson_visibility, JSON_VALUE);
+        if (!cJSON_IsNumber(cjson_visibility_val)) {
+            error_bits = ERROR_P_JSON;
+            ESP_LOGE(TAG_ERROR, "Error parsing visbility from JSON.");
+        } else {
+            visibility = cJSON_GetNumberValue(cjson_visibility_val) / 1609;
+            ESP_LOGI(TAG_INFO, "Parsed visibility.");
+        }
     }
 
     cJSON_Delete(cjson_root);
@@ -1528,10 +1554,7 @@ void draw_cc_view() {
     draw_header_string(HEADER_CURR_CONDITIONS);
 
     // Draw container rectangle
-    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS, CC_CONTAINER_Y_POS, CC_CONTAINER_W, CC_CONTAINER_H, 
-        DGX_DARKCYAN(dgx_rgb_to_16));
-    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS + 2, CC_CONTAINER_Y_POS + 2, CC_CONTAINER_W - 4, CC_CONTAINER_H - 4, 
-        CC_CONTAINER_COLOR);
+    draw_main_container();
 
     // Write the date and time.
     draw_date_time();
@@ -1599,14 +1622,11 @@ void draw_local_forecast_view() {
     draw_date_time();
 
     // Draw the container.
-    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS, CC_CONTAINER_Y_POS, CC_CONTAINER_W, CC_CONTAINER_H, 
-        DGX_DARKCYAN(dgx_rgb_to_16));
-    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS + 2, CC_CONTAINER_Y_POS + 2, CC_CONTAINER_W - 4, CC_CONTAINER_H - 4, 
-        CC_CONTAINER_COLOR);
+    draw_main_container();
 
     // Draw the forecast data.
     draw_string_wrapped(main_state_list.curr_node->local_forecast, LF_TEXT_X_POS, LF_TEXT_Y_POS, 
-        DGX_WHITE(dgx_rgb_to_16), LF_TEXT_FONT_SCALE, LF_TEXT_BOUND_W, CC_CONTAINER_H);
+        DGX_WHITE(dgx_rgb_to_16), LF_TEXT_FONT_SCALE, LF_TEXT_BOUND_W, MAIN_CONTAINER_H);
 }
 
 void draw_ext_forecast_view() {
@@ -1633,7 +1653,7 @@ void draw_ext_forecast_view() {
         dgx_fill_rectangle(tft, container_x_pos, EF_CONTAINER_Y_POS, EF_CONTAINER_W + 4, EF_CONTAINER_H + 4, 
             DGX_DARKCYAN(dgx_rgb_to_16));
         dgx_fill_rectangle(tft, container_x_pos + 2, EF_CONTAINER_Y_POS + 2, EF_CONTAINER_W, EF_CONTAINER_H, 
-            CC_CONTAINER_COLOR);
+            MAIN_CONTAINER_COLOR);
 
         // Write the day.
         day_x_pos = i == 0 ? EF_DAY_1_DAY_X_POS : EF_DAY_2_DAY_X_POS;
@@ -1673,10 +1693,14 @@ void draw_menu_view() {
 	// Display menu header text
     draw_header_string(root_menu_node->data);
 
+    // Draw the container.
+    draw_main_container();
+
 	// Show each of the options by traversing through the children of the current parent menu node.
 	const char *cursor = " <";
 	size_t cursor_size = strlen(cursor);
 	size_t option_size = MENU_NODE_DATA_BUFFER_SIZE + cursor_size;
+    int option_len = 0;
 	char option[option_size];
 	memset(option, 0, option_size);
 
@@ -1685,16 +1709,21 @@ void draw_menu_view() {
     uint32_t color;
 	while (temp_curr_menu_node != NULL && i < MENU_MAX_OPTIONS_DISPLAYED) {
         snprintf(option, option_size, "%s", temp_curr_menu_node->data);
+        option_len += strlen(temp_curr_menu_node->data);
 		if (temp_curr_menu_node == curr_menu_node) {
-            strcat(option, cursor);
+            memcpy(option + option_len, cursor, cursor_size);
             color = DGX_ORANGE(dgx_rgb_to_16);
+        } else if (compare_strings(temp_curr_menu_node->data, MENU_OPTION_BACK, -1)) {
+            color = DGX_YELLOW(dgx_rgb_to_16);
         } else {
             color = DGX_WHITE(dgx_rgb_to_16);
         }
-        draw_string(option, MENU_OPTIONS_X, 60 + (MENU_OPTIONS_OFFSET * (i + 1)), color, 2);
+        draw_string(option, MENU_OPTION_X_POS, MENU_OPTION_Y_POS + (MENU_OPTION_OFFSET * (i + 1)), color, 
+            MENU_TEXT_FONT_SCALE);
 
 		memset(option, 0, option_size);
 		temp_curr_menu_node = temp_curr_menu_node->next_sibling;
+        option_len = 0;
 		i++;
 	}
 }
@@ -1707,7 +1736,10 @@ void draw_si_view() {
     draw_header_rect();
 
     // Draw header text
-    draw_header_string(MENU_OPTION_SYSTEM_INFO);
+    draw_header_string(MENU_OPTION_SYSTEM_INFO); 
+
+    // Draw container.
+    draw_main_container();
 
     // Draw system info
     char heap_size[HEAP_SIZE_BUFFER_SIZE];
@@ -1719,19 +1751,22 @@ void draw_si_view() {
     uint32_t min_free_heap_size = esp_get_minimum_free_heap_size();
     snprintf(heap_size, HEAP_SIZE_BUFFER_SIZE, "Min Free Heap Size: %lu B", min_free_heap_size);
     draw_string(heap_size, SI_X_POS, SI_MIN_FREE_HEAP_SIZE_Y_POS, DGX_WHITE(dgx_rgb_to_16), SI_FONT_SCALE);
+
+    // Draw exit instructions.
+    draw_exit_instructions(170, 220);
 }
 
 void draw_test_wrapped_text_view() {
     draw_header_rect();
     draw_header_string("Wrapped Text");
     
-    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS, CC_CONTAINER_Y_POS, CC_CONTAINER_W, CC_CONTAINER_H, 
+    dgx_fill_rectangle(tft, MAIN_CONTAINER_X_POS, MAIN_CONTAINER_Y_POS, MAIN_CONTAINER_W, MAIN_CONTAINER_H, 
         DGX_DARKCYAN(dgx_rgb_to_16));
-    dgx_fill_rectangle(tft, CC_CONTAINER_X_POS + 2, CC_CONTAINER_Y_POS + 2, CC_CONTAINER_W - 4, CC_CONTAINER_H - 4, 
-        CC_CONTAINER_COLOR);
+    dgx_fill_rectangle(tft, MAIN_CONTAINER_X_POS + 2, MAIN_CONTAINER_Y_POS + 2, MAIN_CONTAINER_W - 4, MAIN_CONTAINER_H - 4, 
+        MAIN_CONTAINER_COLOR);
 
-    draw_string_wrapped(TEST_WRAPPED_TEXT, CC_CONTAINER_X_POS + 5, 60, DGX_WHITE(dgx_rgb_to_16), 2, 
-        CC_CONTAINER_W - 4, CC_CONTAINER_H);
+    draw_string_wrapped(TEST_WRAPPED_TEXT, MAIN_CONTAINER_X_POS + 5, 60, DGX_WHITE(dgx_rgb_to_16), 2, 
+        MAIN_CONTAINER_W - 4, MAIN_CONTAINER_H);
 }
 
 void draw_curr_alert() {
@@ -1909,6 +1944,8 @@ void cycle_main_states(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
+
+//*********************************************************************************************************************
 
 void alert_cycle_timer_callback(TimerHandle_t xTimer) {
     xTaskNotifyGiveIndexed(cycle_alert_task_handler, 0);
